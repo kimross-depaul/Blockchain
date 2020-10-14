@@ -1,0 +1,3 @@
+module Blockchain {
+	requires gson;
+}
