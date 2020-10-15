@@ -1,10 +1,18 @@
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 
+import java.io.BufferedReader;
 import java.io.File;
 import java.io.FileNotFoundException;
+import java.io.IOException;
+import java.io.InputStreamReader;
+import java.io.PrintStream;
+import java.net.ServerSocket;
+import java.net.Socket;
+import java.net.UnknownHostException;
 import java.sql.Time;
 import java.util.ArrayList;
+import java.util.Date;
 import java.util.Iterator;
 import java.util.PriorityQueue;
 import java.util.Scanner;
@@ -19,22 +27,135 @@ import java.util.UUID;
  * 	The MedBlock class
  */
 
-public class BlockChain {
-	
+import java.io.IOException;
+import java.net.ServerSocket;
+import java.net.Socket;
+import java.io.*;
+import java.net.*;
+import java.util.ArrayList;
+
+/*
+ * ***************************************************************************
+***************************** REQUESTED HEADER *****************************
+****************************************************************************
+*
+*	1.  NAME:  			Kim Ross 	DATE:  9/20/2020
+*	2.  JAVA VERSION:  	Java SE-9 (from JDK 11.0.5)
+*	3.  RUN INSTRUCTIONS:
+*
+*		This application is comprised of 3 highly-coupled classes:  
+*			JokeServer.java 
+*			JokeClient.java 
+*			JokeClientAdmin.java
+*
+*		The JokeClient connects to the JokeServer to retrieve a Joke or a Proverb
+*		The JokeClientAdmin toggles the JokeServer's mode between  "Joke" and "Proverb" modes
+*		The JokeServer provides Jokes and Proverbs to the JokeClient
+*
+*		Per the assignment specifications, the JokeServer listens for 
+*			JokeClients on port 4545
+*			JokeClientAdmins on port 5050
+*		With an additional command line parameter, the Joke Server also listens for
+*			JokeClients on port 4546
+*			JokeClientAdmins on port 5051
+*		
+*		To Compile:  
+*		javac JokeServer.java
+*
+*		To Run:
+*		In separate command-line windows, run 1 or 2 servers and as many JokeClients
+*		and JokeAdminClients as you like.
+*
+*			RUNNING THE SERVER:
+*			java JokeServer 
+*			
+*			RUNNING A SECONDARY SERVER
+*			java JokeServer secondary		
+*		
+*	4.  EXAMPLES 
+*		Run each of these commmands in their own Command / Shell windows:
+*
+*		java JokeServer
+*
+*		java JokeServer secondary
+*		
+*		java JokeClient localhost
+*
+*		java JokeClient localhost localhost
+*
+*		java JokeClientAdmin localhost
+*
+*		java JokeClientAdmin localhost localhost
+*
+* 	5.   NOTES:
+* 		
+* 	The base code for this project was adapted from Clark Elliot's InetServer
+*/
+
+
+public class BlockChain extends Thread {
+
 	public static void main(String[] args) {
+		//Read data from text file
 		String ProcessID = "0";
 		if (args.length > 0) ProcessID = args[0];
-		PriorityQueue<MedicalBlock> ub = readBlocksFromFile("BlockInput" + ProcessID + ".txt");
+		//PriorityQueue<MedicalBlock> ub = readBlocksFromFile("BlockInput" + ProcessID + ".txt");
+		//PriorityQueue<MedicalBlock> blockChain = new PriorityQueue<MedicalBlock>();
 		
-		Iterator it = ub.iterator();
-		while (it.hasNext()) {
-			MedicalBlock thisBlock = (MedicalBlock)it.next();
-			System.out.println(thisBlock.toJson());
+		//Create a ModeHolder and 2 servers:  the JokeServer (server) and the AdminServer
+		BlockHolder blockHolder = new BlockHolder();
+		BlockServer UBserver = new BlockServer(4820, ProcessID, new UnverifiedBlockWorker(blockHolder), blockHolder);
+		BlockServer blockChainServer = new BlockServer(4930, ProcessID, new VerifiedBlockWorker(blockHolder), blockHolder);
+		
+		UBserver.start();
+		blockChainServer.start();
+		
+		Gson gson = new GsonBuilder().setPrettyPrinting().create();
+		
+		sendMessageToServer("here's a message", 48201);
+		sendMessageToServer(gson.toJson(blockHolder.ub), 49301);
+	}
+	public static void sendMessageToServer(String msg, int port) {
+		Socket socket;					//Generic connection between 2 hosts
+		BufferedReader fromServer;		//We need to be able to read data from the server
+		PrintStream toServer;			//We need to be able to send data to the server
+		String textFromServer;
+		
+		try {
+			//Connect to the server and establish handles for reading and writing
+			socket = new Socket("localhost", port);	
+			fromServer = new BufferedReader(new InputStreamReader(socket.getInputStream()));
+			toServer = new PrintStream(socket.getOutputStream());
+			
+			//This is where we send our request for a domain-name
+			toServer.println(msg); 
+			toServer.flush();
+		
+			textFromServer = fromServer.readLine();
+			if (textFromServer != null) {
+				System.out.println(textFromServer);
+			}else {
+				System.out.println("(server send me a null)");
+			}
+		
+			//Close the socket, we're done.
+			socket.close();
+			
+		}catch (IOException iox) {
+			//Reading and Writing can throw an IOException, which we have to handle
+			System.out.println("Error reading from server: " + iox.getMessage());
 		}
-		
 	}
 	
-	public static PriorityQueue<MedicalBlock> readBlocksFromFile(String fileName) {
+
+}
+class BlockHolder {
+	PriorityQueue ub;
+	PriorityQueue blockChain;
+	
+	public BlockHolder() {}
+	
+	public void readBlocksFromFile(String fileName) {
 		ArrayList<String> ret = new ArrayList<String>();
 		Scanner scanner = null;
 		try {
@@ -50,13 +171,161 @@ public class BlockChain {
 		} finally {
 			if (scanner != null) scanner.close();
 		}
-		PriorityQueue<MedicalBlock> ub = new PriorityQueue<MedicalBlock>();
+		this.ub = new PriorityQueue<MedicalBlock>();
 		for (int i = 0; i < ret.size(); i++) {
 			ub.add(new MedicalBlock(ret.get(i)));
 		}
-		return ub;
 	}
 }
+//This accepts either a worker that serves Jokes/Proverbs or a worker that toggles nodes
+class BlockServer extends Thread {
+	int port;					
+	Socket socket;
+	ServerSocket serverSocket;
+	IWorker worker;
+	boolean run = true;			//We keep running until run is false
+	BlockHolder blockHolder;
+	
+	public BlockServer(int _port, String ProcessID, IWorker _worker, BlockHolder _blockHolder) {	
+		this.port = Integer.valueOf(_port + ProcessID);
+		this.blockHolder = _blockHolder;
+		if (blockHolder.ub == null) this.blockHolder.readBlocksFromFile("BlockInput" + ProcessID + ".txt");
+		
+		try {
+			this.serverSocket = new ServerSocket(port, 6);
+			this.worker = _worker;
+		} catch (IOException e) {
+			e.printStackTrace();
+		}
+		System.out.println("Kim Ross's version of JokeServer, adapted from Clark Elliot's Inet server 1.1 - listening on port " + port);
+	}	
+
+	public void run() {
+		//Keep running until the JokeClientAdmin tells us to shut down.
+		//This just continually accepts requests
+		//the Worker processes the input.
+		while (true) { //modeHolder.shouldRun()) {
+			try {
+				socket = serverSocket.accept();
+				System.out.println("THIS IS ON PORT = " + serverSocket.getLocalPort());
+				System.out.println("THIS SOCK'S PORT = " + socket.getPort());
+				worker.setSocket(socket);
+				worker.run();
+			} catch (IOException e) {
+				System.out.println(e.getMessage());
+			}	
+		}
+		//Housekeeping
+		/*
+		try {
+			socket.close();
+		} catch (NullPointerException nullex) {
+			System.out.println("Couldn't close the socket, it wasn't initialized yet.");
+		} catch (IOException e) {
+			e.printStackTrace();
+		}*/
+	}
+}
+
+/*
+ * Both JokeServer instances needed a "Worker"
+ * But each worker needed to do different things.
+ * An interface lets each kind of server has it's own worker by composition
+ */
+interface IWorker  {
+	public void start();
+	public void run();
+	public void setSocket(Socket _socket);
+}
+
+class UnverifiedBlockWorker extends Thread implements IWorker {
+	Socket socket;
+    BlockHolder blockHolder;
+	
+	UnverifiedBlockWorker (BlockHolder _blockHolder) { //ModeHolder _modeHolder) {
+		this.blockHolder = _blockHolder;
+	}
+	
+	@Override
+	public void setSocket(Socket _socket) {
+		this.socket = _socket;
+	}
+	
+	public void run() {
+		PrintStream out = null;
+		BufferedReader in = null;
+		try {
+			//"socket" gives us 2 streams:
+			//	- One for incoming data
+			//	- One for outgoing data
+			in = new BufferedReader (new InputStreamReader(socket.getInputStream()));
+			out = new PrintStream(socket.getOutputStream());
+			
+			try {
+				//Get the Joke/Proverb our client is requesting
+				String twoIndexes = in.readLine();						
+				System.out.println("Recieved item:  " + twoIndexes);
+				
+				//And send it back to our JokeClient
+				out.println("I got this from you:  " + twoIndexes);
+			}catch (NumberFormatException numex) {
+				System.out.println("Server received an invalid joke/proverb index");
+			}catch (IOException iox) {
+				//If we're here, we couldn't read incoming data from the client
+				System.out.println("Server encountered a read-error: " + iox.getMessage());
+			}
+			socket.close();
+		}catch (IOException ioe) {
+			//Accessing the stream in either direction, in or out, can throw an IOException
+			System.out.println("Server encountered a read or write error:  " + ioe.getMessage());
+		}
+	}
+}
+
+class VerifiedBlockWorker extends Thread implements IWorker {
+	Socket socket;
+    BlockHolder blockHolder;
+	
+	VerifiedBlockWorker (BlockHolder _blockHolder) { //ModeHolder _modeHolder) {
+		this.blockHolder = _blockHolder;
+	}
+	
+	@Override
+	public void setSocket(Socket _socket) {
+		this.socket = _socket;
+	}
+	
+	public void run() {
+		PrintStream out = null;
+		BufferedReader in = null;
+		try {
+			//"socket" gives us 2 streams:
+			//	- One for incoming data
+			//	- One for outgoing data
+			in = new BufferedReader (new InputStreamReader(socket.getInputStream()));
+			out = new PrintStream(socket.getOutputStream());
+			
+			try {
+				//Get the Joke/Proverb our client is requesting
+				String twoIndexes = in.readLine();						
+				System.out.println("Recieved item:  " + twoIndexes);
+				
+				//And send it back to our JokeClient
+				out.println("I got this from you:  " + twoIndexes);
+			}catch (NumberFormatException numex) {
+				System.out.println("Server received an invalid joke/proverb index");
+			}catch (IOException iox) {
+				//If we're here, we couldn't read incoming data from the client
+				System.out.println("Server encountered a read-error: " + iox.getMessage());
+			}
+			socket.close();
+		}catch (IOException ioe) {
+			//Accessing the stream in either direction, in or out, can throw an IOException
+			System.out.println("Server encountered a read or write error:  " + ioe.getMessage());
+		}
+	}
+}
+
 class MedicalBlock implements Comparable {
 	  String BlockID;
 	  String VerificationProcessID;
@@ -70,7 +339,7 @@ class MedicalBlock implements Comparable {
 	  String Rx;
 ///	  String RandomSeed; // Our guess. Ultimately our winning guess.
 	  String WinningHash;
-	  //Date timeStamp;
+	  Date timeStamp;
 	  
 	//John Smith 1996.03.07 123-45-6789 Chickenpox BedRest aspirin
 
@@ -84,7 +353,9 @@ class MedicalBlock implements Comparable {
 		  Diag = vals[4];
 		  Treat = vals[5];
 		  Rx = vals[6];
+		  timeStamp = new Date();
 	  }
+	  
 	  
 	  public String toJson() {
 		  GsonBuilder gb = new GsonBuilder();
@@ -95,7 +366,14 @@ class MedicalBlock implements Comparable {
 
 	@Override
 	public int compareTo(Object o) {
-		return 0;
+		MedicalBlock m = (MedicalBlock)o;
+		if (m.timeStamp.before(this.timeStamp)) {
+			return -1;
+		}else if (m.timeStamp.after(this.timeStamp)) {
+			return 1;
+		}else {
+			return 0; //must be the same?
+		}
+		
 	}
 }	
-
