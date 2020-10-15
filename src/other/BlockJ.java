@@ -1,3 +1,5 @@
+package other;
+
 /* BlockJ.java
 
 Version 1.3 2020-02-10:
@@ -434,6 +436,9 @@ public class BlockJ {
 
     /* Now let's see what the JSON of the full block looks like: */
 
+    GsonBuilder gb = new GsonBuilder();
+    gb.setPrettyPrinting();
+    Gson gson1 = gb.create();
     Gson gson = new GsonBuilder().setPrettyPrinting().create();
 
     // Convert the Java object to a JSON String:
