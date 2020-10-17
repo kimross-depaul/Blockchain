@@ -95,7 +95,7 @@ import java.util.ArrayList;
 
 public class BlockChain extends Thread {
 
-	public static void main(String[] args) {
+	public static void main(String[] args) throws InterruptedException {
 		//Read data from text file
 		String ProcessID = "0";
 		if (args.length > 0) ProcessID = args[0];
@@ -113,7 +113,16 @@ public class BlockChain extends Thread {
 		Gson gson = new GsonBuilder().setPrettyPrinting().create();
 		
 		sendMessageToServer("here's a message", 48201);
-		sendMessageToServer(gson.toJson(blockHolder.ub), 49301);
+		sendMessageToServer(gson.toJson(blockHolder.ub) + "\n\r", 49301);
+		sendMessageToServer("here's a message", 48201);
+		sendMessageToServer(gson.toJson(blockHolder.ub) + "\n\r", 49301);
+		sendMessageToServer("here's a message", 48201);
+		sendMessageToServer(gson.toJson(blockHolder.ub) + "\n\r", 49301);
+		sendMessageToServer("here's a message", 48201);
+		sendMessageToServer(gson.toJson(blockHolder.ub) + "\n\r", 49301);
+		sendMessageToServer("here's a message", 48201);
+		sendMessageToServer(gson.toJson(blockHolder.ub) + "\n\r", 49301);
+		sendMessageToServer("here's a message", 48201);
 	}
 	public static void sendMessageToServer(String msg, int port) {
 		Socket socket;					//Generic connection between 2 hosts
@@ -124,19 +133,12 @@ public class BlockChain extends Thread {
 		try {
 			//Connect to the server and establish handles for reading and writing
 			socket = new Socket("localhost", port);	
-			fromServer = new BufferedReader(new InputStreamReader(socket.getInputStream()));
+			//fromServer = new BufferedReader(new InputStreamReader(socket.getInputStream()));
 			toServer = new PrintStream(socket.getOutputStream());
 			
-			//This is where we send our request for a domain-name
-			toServer.println(msg); 
+			toServer.print(msg); 
 			toServer.flush();
-		
-			textFromServer = fromServer.readLine();
-			if (textFromServer != null) {
-				System.out.println(textFromServer);
-			}else {
-				System.out.println("(server send me a null)");
-			}
+			//System.out.println("\tsent " + msg);
 		
 			//Close the socket, we're done.
 			socket.close();
@@ -206,9 +208,8 @@ class BlockServer extends Thread {
 		//the Worker processes the input.
 		while (true) { //modeHolder.shouldRun()) {
 			try {
+				System.out.print("<");
 				socket = serverSocket.accept();
-				System.out.println("THIS IS ON PORT = " + serverSocket.getLocalPort());
-				System.out.println("THIS SOCK'S PORT = " + socket.getPort());
 				worker.setSocket(socket);
 				worker.run();
 			} catch (IOException e) {
@@ -263,11 +264,19 @@ class UnverifiedBlockWorker extends Thread implements IWorker {
 			
 			try {
 				//Get the Joke/Proverb our client is requesting
-				String twoIndexes = in.readLine();						
-				System.out.println("Recieved item:  " + twoIndexes);
+				StringBuilder sb = new StringBuilder();
+				String result = "";
+					
+				System.out.println("-----------------" + in.ready() + "--------------------------");
+				while ((result = in.readLine()) != null) {
+					System.out.println("\t" + result);
+					sb.append(result);
+				}
+					
+				System.out.println("\tUBlockworker Recieved item:  " + sb.toString());
 				
 				//And send it back to our JokeClient
-				out.println("I got this from you:  " + twoIndexes);
+				out.println("I got this from you:  " + sb.toString());
 			}catch (NumberFormatException numex) {
 				System.out.println("Server received an invalid joke/proverb index");
 			}catch (IOException iox) {
@@ -275,6 +284,7 @@ class UnverifiedBlockWorker extends Thread implements IWorker {
 				System.out.println("Server encountered a read-error: " + iox.getMessage());
 			}
 			socket.close();
+			System.out.print(">");
 		}catch (IOException ioe) {
 			//Accessing the stream in either direction, in or out, can throw an IOException
 			System.out.println("Server encountered a read or write error:  " + ioe.getMessage());
@@ -307,11 +317,22 @@ class VerifiedBlockWorker extends Thread implements IWorker {
 			
 			try {
 				//Get the Joke/Proverb our client is requesting
-				String twoIndexes = in.readLine();						
-				System.out.println("Recieved item:  " + twoIndexes);
+				StringBuilder sb = new StringBuilder();
+				String result = "";
+
+				System.out.println("-----------------bc" + in.ready() + "--------------------------");				
+				while ((result = in.readLine()) != null) {
+					result = in.readLine();
+					sb.append(result);
+				}
+				/*while ((result = in.readLine()) != null) {
+					sb.append(result);
+				}  */
+					
+				System.out.println("\tBlockchain Worker Recieved item:  " + sb.toString());
 				
 				//And send it back to our JokeClient
-				out.println("I got this from you:  " + twoIndexes);
+				out.println("I got this from you:  " + sb.toString());
 			}catch (NumberFormatException numex) {
 				System.out.println("Server received an invalid joke/proverb index");
 			}catch (IOException iox) {
