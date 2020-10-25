@@ -1,5 +1,6 @@
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
+import com.google.gson.reflect.TypeToken;
 
 import java.io.BufferedReader;
 import java.io.File;
@@ -35,6 +36,26 @@ import java.net.*;
 import java.util.ArrayList;
 
 /*
+ * IN MY OWN WORDS
+- You have 3 servers:  p0, p1, p2
+x Each server reads its own BlockInputN.Txt file
+x Each server creates UnverifiedBlocks from its text file
+o Each server multicasts its unverified blocks to the other servers (listening on 4820+processID)
+- Each server listens for the multi-casted UB's and adds them to its own PriorityQueue of UBs
+- Each server goes to work on the highest-priority block
+- First solver stamps the solved UB (proved work) and multicasts just that VB to the other servers
+- Each server updates its own local copy of the BlockChain (listening on 4930+processID)
+- Server 0 writes it to the log file.
+
+what datatype is his timestamp
+	date = new Date();
+	T1 = String.format("%1$s %2$tF.%2$tT", "", date); // Create the TimeStamp string.
+	TimeStampString = T1 + "." + i; // Use process num extension. No timestamp collisions!
+he had 
+	a server for keys
+	a server for getting incoming unverified blocks
+	a server to consume queued-up unverified blocks
+
  * ***************************************************************************
 ***************************** REQUESTED HEADER *****************************
 ****************************************************************************
@@ -94,13 +115,13 @@ import java.util.ArrayList;
 
 
 public class BlockChain extends Thread {
+	public static int NUM_CONSORTIUM_MEMBERS = 3;
 
 	public static void main(String[] args) throws InterruptedException {
 		//Read data from text file
 		String ProcessID = "0";
 		if (args.length > 0) ProcessID = args[0];
-		//PriorityQueue<MedicalBlock> ub = readBlocksFromFile("BlockInput" + ProcessID + ".txt");
-		//PriorityQueue<MedicalBlock> blockChain = new PriorityQueue<MedicalBlock>();
+		System.out.println("I'm process " + ProcessID);
 		
 		//Create a ModeHolder and 2 servers:  the JokeServer (server) and the AdminServer
 		BlockHolder blockHolder = new BlockHolder();
@@ -112,17 +133,17 @@ public class BlockChain extends Thread {
 		
 		Gson gson = new GsonBuilder().setPrettyPrinting().create();
 		
-		sendMessageToServer("here's a message", 48201);
-		sendMessageToServer(gson.toJson(blockHolder.ub) + "\n\r", 49301);
-		sendMessageToServer("here's a message", 48201);
-		sendMessageToServer(gson.toJson(blockHolder.ub) + "\n\r", 49301);
-		sendMessageToServer("here's a message", 48201);
-		sendMessageToServer(gson.toJson(blockHolder.ub) + "\n\r", 49301);
-		sendMessageToServer("here's a message", 48201);
-		sendMessageToServer(gson.toJson(blockHolder.ub) + "\n\r", 49301);
-		sendMessageToServer("here's a message", 48201);
-		sendMessageToServer(gson.toJson(blockHolder.ub) + "\n\r", 49301);
-		sendMessageToServer("here's a message", 48201);
+		for (int i = 0; i < NUM_CONSORTIUM_MEMBERS; i++) {
+			if (!(i + "").contentEquals(ProcessID)) {
+				System.out.println("PUBLISHING TO PORT 4820" + i);
+				String tempPort = "4820" + i;
+				sendMessageToServer(gson.toJson(blockHolder.ub), Integer.valueOf(tempPort));
+				tempPort = "4930" + i;
+				sendMessageToServer("here's a message", Integer.valueOf(tempPort));
+			}
+		}
+
+
 	}
 	public static void sendMessageToServer(String msg, int port) {
 		Socket socket;					//Generic connection between 2 hosts
@@ -135,7 +156,7 @@ public class BlockChain extends Thread {
 			socket = new Socket("localhost", port);	
 			//fromServer = new BufferedReader(new InputStreamReader(socket.getInputStream()));
 			toServer = new PrintStream(socket.getOutputStream());
-			
+		
 			toServer.print(msg); 
 			toServer.flush();
 			//System.out.println("\tsent " + msg);
@@ -152,7 +173,7 @@ public class BlockChain extends Thread {
 
 }
 class BlockHolder {
-	PriorityQueue ub;
+	PriorityQueue<MedicalBlock> ub;
 	PriorityQueue blockChain;
 	
 	public BlockHolder() {}
@@ -174,8 +195,17 @@ class BlockHolder {
 			if (scanner != null) scanner.close();
 		}
 		this.ub = new PriorityQueue<MedicalBlock>();
+
 		for (int i = 0; i < ret.size(); i++) {
 			ub.add(new MedicalBlock(ret.get(i)));
+		}
+	}
+	
+	public void printUb() {
+		Iterator it = ub.iterator();
+		while (it.hasNext()) {
+			MedicalBlock b = (MedicalBlock)it.next();
+			System.out.println("==" + b.Fname + " " + b.Lname);
 		}
 	}
 }
@@ -266,17 +296,17 @@ class UnverifiedBlockWorker extends Thread implements IWorker {
 				//Get the Joke/Proverb our client is requesting
 				StringBuilder sb = new StringBuilder();
 				String result = "";
-					
+				
+				//READING VERIFIED AND UNVERIFIED BLOCKS FROM THE CONSORTIUM
 				System.out.println("-----------------" + in.ready() + "--------------------------");
 				while ((result = in.readLine()) != null) {
 					System.out.println("\t" + result);
 					sb.append(result);
-				}
-					
+				}					
 				System.out.println("\tUBlockworker Recieved item:  " + sb.toString());
 				
-				//And send it back to our JokeClient
-				out.println("I got this from you:  " + sb.toString());
+				//ADDING UNVERIFIED BLOCKS TO THE UB CHAIN
+				updateUnverifiedBlocks(sb.toString());
 			}catch (NumberFormatException numex) {
 				System.out.println("Server received an invalid joke/proverb index");
 			}catch (IOException iox) {
@@ -289,6 +319,24 @@ class UnverifiedBlockWorker extends Thread implements IWorker {
 			//Accessing the stream in either direction, in or out, can throw an IOException
 			System.out.println("Server encountered a read or write error:  " + ioe.getMessage());
 		}
+	}
+	private void updateUnverifiedBlocks(String json) {
+		//GSON needs to know what type of object to return
+		java.lang.reflect.Type ubArray = new TypeToken<ArrayList<MedicalBlock>>() {}.getType();
+		
+		//Convert the json string into an ArrayList
+		Gson gson = new GsonBuilder().setPrettyPrinting().create();
+		ArrayList<MedicalBlock> incomingUBs = gson.fromJson(json, ubArray);
+		
+		//Then turn it into a PriorityQueue
+		Iterator<MedicalBlock> it = incomingUBs.iterator();
+		while (it.hasNext()) {
+			System.out.println("...adding a block");
+			this.blockHolder.ub.add(it.next());
+		}
+		
+		this.blockHolder.printUb();
+		
 	}
 }
 
@@ -383,6 +431,11 @@ class MedicalBlock implements Comparable {
 		  gb.setPrettyPrinting();
 		  Gson gson = gb.create();
 		  return gson.toJson(this);
+	  }
+	  
+	  @Override
+	  public String toString() {
+		  return BlockID + " " + VerificationProcessID + " " + PreviousHash + " " + Fname + " " + Lname;
 	  }
 
 	@Override
