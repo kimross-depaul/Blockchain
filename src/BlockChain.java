@@ -11,6 +11,12 @@ import java.io.PrintStream;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.net.UnknownHostException;
+import java.security.KeyPair;
+import java.security.KeyPairGenerator;
+import java.security.NoSuchAlgorithmException;
+import java.security.NoSuchProviderException;
+import java.security.PublicKey;
+import java.security.SecureRandom;
 import java.sql.Time;
 import java.util.ArrayList;
 import java.util.Date;
@@ -158,6 +164,14 @@ public class BlockChain extends Thread {
 		sendMyUBs(ProcessID, blockHolder);
 		
 		//3.  Start working on blocks, end out when you solve one
+		//GET THE FIRST BLOCK AND START DOING WORK
+		
+		//I SOLVED IT (AM I THE FIRST? SEE IF ITS ALREADY IN THE BLOCKCHAIN)
+		
+		//I AM FIRST!  PROCESS THE BLOCK...
+		
+		
+		//...AND PUBLISH IT TO THE CONSORTIUM
 		//sendMessageToServer("here's a message", parseTargetPort("493", 1));
 	}
 	private static int parseTargetPort(String portPrefix, int processId) {
@@ -166,9 +180,10 @@ public class BlockChain extends Thread {
 	}
 	
 	public static void sendKeys(String myProcessID) {
-		String myKey = "This is my key";
+		//I THINK I SHOULD SEND THS AS JSON AND CONSUME IT ON THE OTHER END AS A PublicKey
+		PublicKey myKey = KeyUtils.getMyPublicKey(Integer.valueOf(myProcessID));
 		for (int i = 0; i < NUM_CONSORTIUM_MEMBERS; i++) {	
-			sendMessageToServer(myProcessID + myKey, parseTargetPort(KEY_PORT_PREFIX, i));
+			sendMessageToServer(myProcessID + myKey.toString(), parseTargetPort(KEY_PORT_PREFIX, i));
 		}		
 	}
 	public static void sendMyUBs(String myProcessID, BlockHolder blockHolder) {
@@ -231,6 +246,44 @@ public class BlockChain extends Thread {
 	}
 	
 
+}
+class KeyUtils {
+	 //Taken from BlockJ.java sample code
+	/*need to figure out where the credit belong... The web sources:
+
+		https://mkyong.com/java/how-to-parse-json-with-gson/
+		http://www.java2s.com/Code/Java/Security/SignatureSignAndVerify.htm
+		https://www.mkyong.com/java/java-digital-signatures-example/ (not so clear)
+		https://javadigest.wordpress.com/2012/08/26/rsa-encryption-example/
+		https://www.programcreek.com/java-api-examples/index.php?api=java.security.SecureRandom
+		https://www.mkyong.com/java/java-sha-hashing-example/
+		https://stackoverflow.com/questions/19818550/java-retrieve-the-actual-value-of-the-public-key-from-the-keypair-object
+		https://www.java67.com/2014/10/how-to-pad-numbers-with-leading-zeroes-in-Java-example.html
+	*/
+
+	public static PublicKey getMyPublicKey(long seed) {
+		KeyPair keyPair = generateKeyPair(seed);
+		return keyPair.getPublic();
+	}
+	//Makes a key pair so I can extract the public key
+	public static KeyPair generateKeyPair(long seed)  {
+	    KeyPairGenerator keyGenerator = null;
+		try {
+			keyGenerator = KeyPairGenerator.getInstance("RSA");
+		} catch (NoSuchAlgorithmException e) {
+			System.out.println(e.getMessage());
+		}
+	    SecureRandom rng = null;
+		try {
+			rng = SecureRandom.getInstance("SHA1PRNG", "SUN");
+		} catch (NoSuchAlgorithmException | NoSuchProviderException e) {
+			System.out.println(e.getMessage());
+		}
+	    rng.setSeed(seed);
+	    keyGenerator.initialize(1024, rng);
+	    
+	    return (keyGenerator.generateKeyPair());
+	}
 }
 class BlockHolder {
 	PriorityQueue<MedicalBlock> ub;
