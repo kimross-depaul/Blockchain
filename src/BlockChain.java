@@ -116,35 +116,95 @@ he had
 
 public class BlockChain extends Thread {
 	public static int NUM_CONSORTIUM_MEMBERS = 3;
+	public static String KEY_PORT_PREFIX = "471";
+	public static String UB_PORT_PREFIX = "482";
+	public static String BLOCK_PORT_PREFIX = "493";
 
 	public static void main(String[] args) throws InterruptedException {
 		//Read data from text file
 		String ProcessID = "0";
 		if (args.length > 0) ProcessID = args[0];
+		int intProcessID = Integer.valueOf(ProcessID);
 		System.out.println("I'm process " + ProcessID);
 		
 		//Create a ModeHolder and 2 servers:  the JokeServer (server) and the AdminServer
-		BlockHolder blockHolder = new BlockHolder();
-		BlockServer UBserver = new BlockServer(4820, ProcessID, new UnverifiedBlockWorker(blockHolder), blockHolder);
-		BlockServer blockChainServer = new BlockServer(4930, ProcessID, new VerifiedBlockWorker(blockHolder), blockHolder);
+		BlockHolder blockHolder = new BlockHolder(NUM_CONSORTIUM_MEMBERS);
+		BlockServer keyServer = new BlockServer(parseTargetPort(KEY_PORT_PREFIX, intProcessID), ProcessID, new KeyWorker(blockHolder), blockHolder);
+		BlockServer UBserver = new BlockServer(parseTargetPort(UB_PORT_PREFIX, intProcessID), ProcessID, new UnverifiedBlockWorker(blockHolder), blockHolder);
+		BlockServer blockChainServer = new BlockServer(parseTargetPort(BLOCK_PORT_PREFIX, intProcessID), ProcessID, new VerifiedBlockWorker(blockHolder), blockHolder);
 		
+		keyServer.start();
 		UBserver.start();
-		blockChainServer.start();
+		//blockChainServer.start();	
+		
+		//port 471X receives public keys
+		//port 482X receives unverified blocks
+		//port 493X receives verified blocks
+		
+		//1.  Send my key
+		sendKeys(ProcessID);
+		
+		//2.  Only process #2 checks to see if we got all the keys.
+		while (!blockHolder.hasAllKeys() && intProcessID == NUM_CONSORTIUM_MEMBERS -1) {
+			System.out.println("... collecting the keys from the consortium...");
+			Thread.sleep(2000);
+		}
+		if (blockHolder.hasAllKeys()) {
+			System.out.println("All Keys Received.");
+			blockHolder.printKeys();
+		}
+		
+		//2.  When we have all the keys, send/receive UBs
+		sendMyUBs(ProcessID, blockHolder);
+		
+		//3.  Start working on blocks, end out when you solve one
+		//sendMessageToServer("here's a message", parseTargetPort("493", 1));
+	}
+	private static int parseTargetPort(String portPrefix, int processId) {
+		String tempPort = portPrefix + processId;
+		return Integer.valueOf(tempPort);
+	}
+	
+	public static void sendKeys(String myProcessID) {
+		String myKey = "This is my key";
+		for (int i = 0; i < NUM_CONSORTIUM_MEMBERS; i++) {	
+			sendMessageToServer(myProcessID + myKey, parseTargetPort(KEY_PORT_PREFIX, i));
+		}		
+	}
+	public static void sendMyUBs(String myProcessID, BlockHolder blockHolder) {
+		PriorityQueue<MedicalBlock> fileUBs = readBlocksFromFile("BlockInput" + myProcessID + ".txt");
 		
 		Gson gson = new GsonBuilder().setPrettyPrinting().create();
-		
-		for (int i = 0; i < NUM_CONSORTIUM_MEMBERS; i++) {
-			if (!(i + "").contentEquals(ProcessID)) {
-				System.out.println("PUBLISHING TO PORT 4820" + i);
-				String tempPort = "4820" + i;
-				sendMessageToServer(gson.toJson(blockHolder.ub), Integer.valueOf(tempPort));
-				tempPort = "4930" + i;
-				sendMessageToServer("here's a message", Integer.valueOf(tempPort));
-			}
-		}
-
-
+		for (int i = 0; i < NUM_CONSORTIUM_MEMBERS; i++) {	
+			sendMessageToServer(gson.toJson(fileUBs), parseTargetPort(UB_PORT_PREFIX, i));
+		}		
 	}
+	public static PriorityQueue<MedicalBlock> readBlocksFromFile(String fileName) {
+		ArrayList<String> ret = new ArrayList<String>();
+		Scanner scanner = null;
+		try {
+			java.io.File file = new java.io.File(System.getProperty("user.dir") + "\\" + fileName);
+			System.out.println("Reading blocks from text file " + file.getAbsolutePath());
+			scanner = new Scanner(file);
+    	
+			while (scanner.hasNextLine()) {
+				ret.add(scanner.nextLine());
+			}
+				
+		} catch (FileNotFoundException e) {
+			System.out.println(e.getMessage());
+		} finally {
+			if (scanner != null) scanner.close();
+		}
+		PriorityQueue<MedicalBlock> ub = new PriorityQueue<MedicalBlock>();
+
+		for (int i = 0; i < ret.size(); i++) {
+			ub.add(new MedicalBlock(ret.get(i)));
+		}
+		return ub;
+	}
+
+	
 	public static void sendMessageToServer(String msg, int port) {
 		Socket socket;					//Generic connection between 2 hosts
 		BufferedReader fromServer;		//We need to be able to read data from the server
@@ -174,33 +234,40 @@ public class BlockChain extends Thread {
 }
 class BlockHolder {
 	PriorityQueue<MedicalBlock> ub;
-	PriorityQueue blockChain;
+	PriorityQueue<MedicalBlock> blockChain;
+	ArrayList<String> consortiumKeys;
+	int numConsortiumMembers;
+	int keysReceived;
 	
-	public BlockHolder() {}
-	
-	public void readBlocksFromFile(String fileName) {
-		ArrayList<String> ret = new ArrayList<String>();
-		Scanner scanner = null;
-		try {
-			java.io.File file = new java.io.File(System.getProperty("user.dir") + "\\src\\" + fileName);
-			scanner = new Scanner(file);
-    	
-			while (scanner.hasNextLine()) {
-				ret.add(scanner.nextLine());
-			}
-				
-		} catch (FileNotFoundException e) {
-			System.out.println(e.getMessage());
-		} finally {
-			if (scanner != null) scanner.close();
+	public BlockHolder(int _numConsortiumMembers) {
+		consortiumKeys = new ArrayList<String>(_numConsortiumMembers);
+		numConsortiumMembers = _numConsortiumMembers;
+		keysReceived = 0;
+		ub = new PriorityQueue<MedicalBlock>();
+		
+		//The arraylist didn't like being populated out of order, so let's initialize each first
+		for (int i = 0; i < numConsortiumMembers; i++) {
+			consortiumKeys.add(i, "");
 		}
-		this.ub = new PriorityQueue<MedicalBlock>();
-
-		for (int i = 0; i < ret.size(); i++) {
-			ub.add(new MedicalBlock(ret.get(i)));
+		
+	}
+	public void addKey(String key, String processId) {
+		System.out.println("\tadding key " + key + " to position " + processId);
+		consortiumKeys.set(Integer.valueOf(processId), key);
+		keysReceived ++;
+	}
+	public String getKey(int pos) {
+		return (String) consortiumKeys.get(pos);
+	}
+	public boolean hasAllKeys() {
+		return keysReceived == numConsortiumMembers;
+	}
+		
+	public void printKeys() {
+		for (int i = 0; i < consortiumKeys.size(); i++) {
+			System.out.println(i + ":  " + consortiumKeys.get(i));
 		}
 	}
-	
 	public void printUb() {
 		Iterator it = ub.iterator();
 		while (it.hasNext()) {
@@ -219,9 +286,8 @@ class BlockServer extends Thread {
 	BlockHolder blockHolder;
 	
 	public BlockServer(int _port, String ProcessID, IWorker _worker, BlockHolder _blockHolder) {	
-		this.port = Integer.valueOf(_port + ProcessID);
+		this.port = Integer.valueOf(_port);// + ProcessID);
 		this.blockHolder = _blockHolder;
-		if (blockHolder.ub == null) this.blockHolder.readBlocksFromFile("BlockInput" + ProcessID + ".txt");
 		
 		try {
 			this.serverSocket = new ServerSocket(port, 6);
@@ -268,7 +334,65 @@ interface IWorker  {
 	public void run();
 	public void setSocket(Socket _socket);
 }
-
+class KeyWorker extends Thread implements IWorker {
+	Socket socket;
+	BlockHolder blockHolder;
+	
+	KeyWorker (BlockHolder _blockHolder) {
+		this.blockHolder = _blockHolder;
+	}
+	@Override
+	public void setSocket(Socket _socket) {
+		this.socket = _socket;
+	}
+	
+	public void run() {
+		PrintStream out = null;
+		BufferedReader in = null;
+		String whatFailed = "";
+		try {
+			//"socket" gives us 2 streams:
+			//	- One for incoming data
+			//	- One for outgoing data
+			in = new BufferedReader (new InputStreamReader(socket.getInputStream()));
+			out = new PrintStream(socket.getOutputStream());
+			
+			try {
+				//Get the key someone is sending us
+				StringBuilder sb = new StringBuilder();
+				String result = "";
+				
+				//READING KEYS FROM CONSORTIUM MEMBERS
+				while ((result = in.readLine()) != null) {
+					System.out.println("\t" + result);
+					sb.append(result);
+				}					
+			
+				String key = "";
+				String processId = "";
+				whatFailed = sb.toString(); //if this fails, I want to see what it was.
+				//They'll send us 1 digit for their process ID and the rest is their key.
+				if (sb.toString().length() > 0) {
+					processId = sb.toString().substring(0,1);
+					key = sb.toString().substring(1, sb.toString().length());
+				}
+				
+				//ADDING THE KEY TO OUR KEY-ARRAY
+				blockHolder.addKey(key, processId);
+			}catch (NumberFormatException numex) {
+				System.out.println("Server received an invalid key from a consortium member: {" + whatFailed + "} on port " + this.socket.getLocalPort());
+			}catch (IOException iox) {
+				//If we're here, we couldn't read incoming data from the client
+				System.out.println("Key Server encountered a read-error: " + iox.getMessage());
+			}
+			socket.close();
+			System.out.print(">");
+		}catch (IOException ioe) {
+			//Accessing the stream in either direction, in or out, can throw an IOException
+			System.out.println("Server encountered a read or write error:  " + ioe.getMessage());
+		}
+	}
+}
 class UnverifiedBlockWorker extends Thread implements IWorker {
 	Socket socket;
     BlockHolder blockHolder;
@@ -303,10 +427,12 @@ class UnverifiedBlockWorker extends Thread implements IWorker {
 					System.out.println("\t" + result);
 					sb.append(result);
 				}					
-				System.out.println("\tUBlockworker Recieved item:  " + sb.toString());
 				
 				//ADDING UNVERIFIED BLOCKS TO THE UB CHAIN
 				updateUnverifiedBlocks(sb.toString());
+				
+				this.blockHolder.printUb();
+				
 			}catch (NumberFormatException numex) {
 				System.out.println("Server received an invalid joke/proverb index");
 			}catch (IOException iox) {
@@ -335,7 +461,9 @@ class UnverifiedBlockWorker extends Thread implements IWorker {
 			this.blockHolder.ub.add(it.next());
 		}
 		
+		System.out.println("blocks so far...-------------------------");
 		this.blockHolder.printUb();
+		System.out.println("---------------------------------");
 		
 	}
 }
