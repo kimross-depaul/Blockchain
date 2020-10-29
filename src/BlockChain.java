@@ -340,7 +340,7 @@ class BlockHolder {
 			ub.add(it.next());
 		}
 		numMembersSentUBs ++;
-		if (numMembersSentUBs == numConsortiumMembers) startProcessingVBs = true;
+		if (numMembersSentUBs == numConsortiumMembers-1) startProcessingVBs = true;
 	}
 }
 //This accepts either a worker that serves Jokes/Proverbs or a worker that toggles nodes
@@ -619,14 +619,16 @@ class VerifiedBlockWorker extends Thread implements IWorker {
 	VerifiedBlockWorker (BlockHolder _blockHolder) { //ModeHolder _modeHolder) {
 		this.blockHolder = _blockHolder;
 	}
-	public void initialize() {
+	public void initialize()  {
 		while (blockHolder.startProcessingVBs == false) {
 			try {
+				System.out.println("... not ready for puzzles...");
 				Thread.sleep(1000);
 			} catch (InterruptedException e) {
 				e.printStackTrace();
 			}
 		}
+		MessageUtils.sendMessageToServer("START!", MessageUtils.parseTargetPort(blockHolder.BLOCK_PORT_PREFIX, blockHolder.intProcessID));
 	}
 	public Boolean keepRunning() {return true;}
 	@Override
@@ -634,6 +636,7 @@ class VerifiedBlockWorker extends Thread implements IWorker {
 		this.socket = _socket;
 	}
 	public void run() {
+		System.out.println("BLOCK SERVER WORKER.RUN");
 		/*
 		 * the vb server start running - it's listening for verified blocks
 		 * another thread (thread2) needs to do work on a block.
@@ -645,9 +648,13 @@ class VerifiedBlockWorker extends Thread implements IWorker {
 		PrintStream out = null;
 		BufferedReader in = null;
 		try {
+			System.out.println("getting a block...");
 			MedicalBlock topUnverifiedBlock = blockHolder.ub.poll();
+			System.out.println("got block " + topUnverifiedBlock.Lname);
 			BlockWorker blockWorker = new BlockWorker(topUnverifiedBlock);
+			System.out.println("created a new blockWorker, starting work.");
 			blockWorker.start();
+			System.out.println("Work finished.");
 			
 			in = new BufferedReader (new InputStreamReader(socket.getInputStream()));
 			out = new PrintStream(socket.getOutputStream());
@@ -662,14 +669,18 @@ class VerifiedBlockWorker extends Thread implements IWorker {
 					sb.append(result);
 				}					
 				
-				//ADDING UNVERIFIED BLOCKS TO THE BLOCKCHAIN (with some verification...)
-				String blockID = updateVerifiedBlocks(sb.toString());
-				//who'd we get this from... we need to give credit  COME BACK
-				if (blockID.contentEquals(topUnverifiedBlock.BlockID)) {
-					blockWorker.interrupt();
+				if (sb.toString().contentEquals("START!")) {
+					//no block, we're just getting started.
+				}else {					
+					//ADDING UNVERIFIED BLOCKS TO THE BLOCKCHAIN (with some verification...)
+					String blockID = updateVerifiedBlocks(sb.toString());
+					//who'd we get this from... we need to give credit  COME BACK
+					if (blockID.contentEquals(topUnverifiedBlock.BlockID)) {
+						blockWorker.interrupt();
+					}
+									
+					this.blockHolder.printVb();
 				}
-								
-				this.blockHolder.printVb();
 
 			}catch (NumberFormatException numex) {
 				System.out.println("Server received an invalid joke/proverb index");
@@ -716,7 +727,8 @@ class BlockWorker extends Thread {
 	}
 	public void run() {
 		try {
-			//do work on the ub
+			System.out.println("I'M WORKING ON A BLOCK!!!");
+		/*	//do work on the ub
 			int randval = 27; // Just some unimportant initial value
 			int tenths = 0;
 			Random r = new Random();
@@ -730,7 +742,9 @@ class BlockWorker extends Thread {
 				}
 			}
 			System.out.println(" <-- We did " + tenths + " tenths of a second of *work*.\n");
-			ub.WinningHash = "COME BACK";
+			ub.WinningHash = "COME BACK";*/
+			Thread.sleep(100);
+			System.out.println("solved it, kind of");
 		}catch (InterruptedException ex) {
 			System.out.println("Interrupted! Move on to another block.");
 		}
