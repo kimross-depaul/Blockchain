@@ -30,6 +30,7 @@ import java.util.Base64;
 import java.util.Date;
 import java.util.Iterator;
 import java.util.PriorityQueue;
+import java.util.Random;
 import java.util.Scanner;
 import java.util.UUID;
 
@@ -56,6 +57,7 @@ x Each server reads its own BlockInputN.Txt file
 x Each server creates UnverifiedBlocks from its text file
 o Each server multicasts its unverified blocks to the other servers (listening on 4820+processID)
 o Each server listens for the multi-casted UB's and adds them to its own PriorityQueue of UBs
+- The UB queue needs to start with one dummy block with "Previous proof of work"
 - Each server goes to work on the highest-priority block
 - First solver stamps the solved UB (proved work) and multicasts just that VB to the other servers
 - Each server updates its own local copy of the BlockChain (listening on 4930+processID)
@@ -66,6 +68,17 @@ o Each server listens for the multi-casted UB's and adds them to its own Priorit
     
     String stringKey = Base64.getEncoder().encodeToString(bytePubkey);
     System.out.println("Key in String form: " + stringKey);
+
+Other details
+- Process 2 startup triggers the running of the whole system.
+- don't forget process 0 has to output the blockchain to BlockchainLedgerSample.json
+- blocks are verified by SHA256 hash of
+	1. previous hash
+	2. random seed
+	3. data (what is data, all the fields somehow?)
+- the "ledger is marshaled to other nodes as json"
+- credit is given to nodes for validating blocks
+
 
 what datatype is his timestamp
 	date = new Date();
@@ -158,25 +171,8 @@ public class BlockChain extends Thread {
 		
 		keyServer.start();
 		UBserver.start();
-		
-		
-		//3.  Start working on blocks, end out when you solve one
-		//GET THE FIRST BLOCK AND START DOING WORK
-		
-		//I SOLVED IT (AM I THE FIRST? SEE IF ITS ALREADY IN THE BLOCKCHAIN)
-		
-		//I AM FIRST!  PROCESS THE BLOCK...
-		
-		
-		//...AND PUBLISH IT TO THE CONSORTIUM
-		//sendMessageToServer("here's a message", parseTargetPort("493", 1));
-
-		//blockChainServer.start();	
-		
-		//port 471X receives public keys
-		//port 482X receives unverified blocks
-		//port 493X receives verified blocks
-		
+		blockChainServer.start();
+				
 	}
 }
 class MessageUtils {
@@ -268,6 +264,7 @@ class BlockHolder {
 	String BLOCK_PORT_PREFIX = "493";
 	int intProcessID;
 	int keysReceived;
+	int numMembersSentUBs;
 	boolean wereUBsSent;
 	boolean startProcessingUBs;
 	boolean startProcessingVBs;
@@ -281,6 +278,7 @@ class BlockHolder {
 		BLOCK_PORT_PREFIX = _BLOCK_PORT_PREFIX;
 		intProcessID = _intProcessID;
 		keysReceived = 0;
+		numMembersSentUBs = 0;
 		wereUBsSent = false;
 		startProcessingUBs = false;
 		startProcessingVBs = false;
@@ -324,6 +322,24 @@ class BlockHolder {
 			System.out.println("==" + b.Fname + " " + b.Lname);
 		}
 	}
+	public void printVb() {
+		Iterator it = blockChain.iterator();
+		System.out.println("VERIFIED BLOCKS===================================");
+		while (it.hasNext()) {
+			MedicalBlock b = (MedicalBlock)it.next();
+			System.out.println("==" + b.Fname + " " + b.Lname);
+		}
+		System.out.println("=================================================");
+	}
+	public void addNewUBs(ArrayList<MedicalBlock> incomingUBs) {
+		Iterator<MedicalBlock> it = incomingUBs.iterator();
+		while (it.hasNext()) {
+			System.out.println("...adding a block");
+			ub.add(it.next());
+		}
+		numMembersSentUBs ++;
+		if (numMembersSentUBs == numConsortiumMembers) startProcessingVBs = true;
+	}
 }
 //This accepts either a worker that serves Jokes/Proverbs or a worker that toggles nodes
 class BlockServer extends Thread {
@@ -351,10 +367,13 @@ class BlockServer extends Thread {
 		//Keep running until the JokeClientAdmin tells us to shut down.
 		//This just continually accepts requests
 		//the Worker processes the input.
+		
+		//Perform setup (whatever that means for your server's purpose)
 		worker.initialize();
+		
+		//Listen for communications from the consortium
 		while (worker.keepRunning()) { 
 			try {
-				
 				System.out.print("Server Running on port " + port);
 				socket = serverSocket.accept();
 				worker.setSocket(socket);
@@ -363,8 +382,7 @@ class BlockServer extends Thread {
 				System.out.println(e.getMessage());
 			}	
 		}
-		//Housekeeping
-		
+		//You must be done with your work - close up the socket.		
 		try {
 			System.out.println("Closing the server on port " + port + " - its work is done.");
 			socket.close();
@@ -572,13 +590,7 @@ class UnverifiedBlockWorker extends Thread implements IWorker {
 		//Convert the json string into an ArrayList
 		Gson gson = new GsonBuilder().setPrettyPrinting().create();
 		ArrayList<MedicalBlock> incomingUBs = gson.fromJson(json, ubArray);
-		
-		//Then turn it into a PriorityQueue
-		Iterator<MedicalBlock> it = incomingUBs.iterator();
-		while (it.hasNext()) {
-			System.out.println("...adding a block");
-			this.blockHolder.ub.add(it.next());
-		}
+		blockHolder.addNewUBs(incomingUBs);
 		
 		System.out.println("blocks so far...-------------------------");
 		this.blockHolder.printUb();
@@ -594,19 +606,36 @@ class VerifiedBlockWorker extends Thread implements IWorker {
 	VerifiedBlockWorker (BlockHolder _blockHolder) { //ModeHolder _modeHolder) {
 		this.blockHolder = _blockHolder;
 	}
-	public void initialize() {}
+	public void initialize() {
+		while (blockHolder.startProcessingVBs == false) {
+			try {
+				Thread.sleep(1000);
+			} catch (InterruptedException e) {
+				e.printStackTrace();
+			}
+		}
+	}
 	public Boolean keepRunning() {return true;}
 	@Override
 	public void setSocket(Socket _socket) {
 		this.socket = _socket;
 	}
 	public void run() {
+		/*
+		 * the vb server start running - it's listening for verified blocks
+		 * another thread (thread2) needs to do work on a block.
+		 * If we receive the solution for the current block, thread2, gets interrupted by VerifiedBlockworker
+		 * 		Is this the block you're working on?  don't bother.
+		 * then thread2 starts again on the next UB
+		 * if we're the winner, we add the verified block and blast it to the other consortium members.
+		 */
 		PrintStream out = null;
 		BufferedReader in = null;
 		try {
-			//"socket" gives us 2 streams:
-			//	- One for incoming data
-			//	- One for outgoing data
+			MedicalBlock topUnverifiedBlock = blockHolder.ub.poll();
+			BlockWorker blockWorker = new BlockWorker(topUnverifiedBlock);
+			blockWorker.start();
+			
 			in = new BufferedReader (new InputStreamReader(socket.getInputStream()));
 			out = new PrintStream(socket.getOutputStream());
 			
@@ -614,20 +643,21 @@ class VerifiedBlockWorker extends Thread implements IWorker {
 				//Get the Joke/Proverb our client is requesting
 				StringBuilder sb = new StringBuilder();
 				String result = "";
-
-				System.out.println("-----------------bc" + in.ready() + "--------------------------");				
-				while ((result = in.readLine()) != null) {
-					result = in.readLine();
-					sb.append(result);
-				}
-				/*while ((result = in.readLine()) != null) {
-					sb.append(result);
-				}  */
-					
-				System.out.println("\tBlockchain Worker Recieved item:  " + sb.toString());
 				
-				//And send it back to our JokeClient
-				out.println("I got this from you:  " + sb.toString());
+				//READING VERIFIED BLOCKS FROM THE CONSORTIUM
+				while ((result = in.readLine()) != null) {
+					sb.append(result);
+				}					
+				
+				//ADDING UNVERIFIED BLOCKS TO THE BLOCKCHAIN (with some verification...)
+				String blockID = updateVerifiedBlocks(sb.toString());
+				//who'd we get this from... we need to give credit  COME BACK
+				if (blockID.contentEquals(topUnverifiedBlock.BlockID)) {
+					blockWorker.interrupt();
+				}
+								
+				this.blockHolder.printVb();
+
 			}catch (NumberFormatException numex) {
 				System.out.println("Server received an invalid joke/proverb index");
 			}catch (IOException iox) {
@@ -640,8 +670,59 @@ class VerifiedBlockWorker extends Thread implements IWorker {
 			System.out.println("Server encountered a read or write error:  " + ioe.getMessage());
 		}
 	}
+	private String updateVerifiedBlocks(String json) {
+		//GSON needs to know what type of object to return
+		java.lang.reflect.Type ubArray = new TypeToken<MedicalBlock>() {}.getType();
+		
+		//Convert the json string into a MedicalBlock
+		Gson gson = new GsonBuilder().setPrettyPrinting().create();
+		MedicalBlock newBlock = gson.fromJson(json, ubArray);
+		
+		//validate it yourself... make sure it's good
+		boolean isValid = newBlock.validate();
+		
+		//Add it to the PriorityQueue
+		if (isValid) blockHolder.blockChain.add(newBlock);
+		
+		System.out.println("blocks so far...-------------------------");
+		this.blockHolder.printVb();
+		System.out.println("---------------------------------");
+		if (isValid) {
+			return newBlock.BlockID;
+		}else {
+			return "";
+		}
+		
+	}
 }
-
+class BlockWorker extends Thread {
+	MedicalBlock ub;
+	
+	public BlockWorker(MedicalBlock _ub) {
+		ub = _ub;
+	}
+	public void run() {
+		try {
+			//do work on the ub
+			int randval = 27; // Just some unimportant initial value
+			int tenths = 0;
+			Random r = new Random();
+			for (int i=0; i<1000; i++){ // safety upper limit of 1000
+				Thread.sleep(100); // not really work because can be defeated, but OK for our purposes.
+				randval = r.nextInt(100); // Higher val = more work
+				System.out.print(".");
+				if (randval < 4) {       // Lower threshold = more work
+					tenths = i;
+					break;
+				}
+			}
+			System.out.println(" <-- We did " + tenths + " tenths of a second of *work*.\n");
+			ub.WinningHash = "COME BACK";
+		}catch (InterruptedException ex) {
+			System.out.println("Interrupted! Move on to another block.");
+		}
+	}
+}
 class MedicalBlock implements Comparable {
 	  String BlockID;
 	  String VerificationProcessID;
@@ -670,6 +751,7 @@ class MedicalBlock implements Comparable {
 		  Treat = vals[5];
 		  Rx = vals[6];
 		  timeStamp = new Date();
+		  
 	  }
 	  public String toJson() {
 		  GsonBuilder gb = new GsonBuilder();
@@ -693,4 +775,21 @@ class MedicalBlock implements Comparable {
 		}
 		
 	}
+	  public boolean validate() {
+		  //COME BACK
+		  //NEED TO CHECK THAT THE WINNING HASH WORKS PROPERLY
+		  return true;
+	  }
+	  private void setSeed() {
+		  //Credit to Clark Elliot's BlockJ Sample Code 
+		  Random rr = new Random(); // 
+		  int rval = rr.nextInt(21472);
+		  String randSeed = String.format("%06X", rval & 0x0FFFFFF);  // Mask off all but trailing 6 chars.
+		  
+		  rval = rr.nextInt(21472);
+		  
+		  String randSeed2 = Integer.toHexString(rval);
+		  //RandomSeed = randSeed2;
+	  }
 }	
+
