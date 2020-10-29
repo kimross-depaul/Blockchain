@@ -242,12 +242,12 @@ class KeyUtils {
 	    
 	    return (keyGenerator.generateKeyPair());
 	}
-	public static void sendKeys(String myProcessID, int numConsortiumMembers, String keyPortPrefix) {
-		PublicKey myKey = KeyUtils.getMyPublicKey(Integer.valueOf(myProcessID));
+	public static void sendKeys(int intProcessID, int numConsortiumMembers, String keyPortPrefix) {
+		PublicKey myKey = KeyUtils.getMyPublicKey(intProcessID);
 		for (int i = 0; i < numConsortiumMembers; i++) {
 			//COME BACK TO THIS
 			//sendMessageToServer(myProcessID + gsonParser.toJson(myKey), parseTargetPort(KEY_PORT_PREFIX, i));
-			MessageUtils.sendMessageToServer(myProcessID + myKey.toString(), MessageUtils.parseTargetPort(keyPortPrefix, i));
+			MessageUtils.sendMessageToServer(intProcessID + myKey.toString(), MessageUtils.parseTargetPort(keyPortPrefix, i));
 		}		
 	}
 }
@@ -266,6 +266,7 @@ class BlockHolder {
 	int keysReceived;
 	int numMembersSentUBs;
 	boolean wereUBsSent;
+	boolean startProcessingKeys;
 	boolean startProcessingUBs;
 	boolean startProcessingVBs;
 	
@@ -280,6 +281,7 @@ class BlockHolder {
 		keysReceived = 0;
 		numMembersSentUBs = 0;
 		wereUBsSent = false;
+		startProcessingKeys = false;
 		startProcessingUBs = false;
 		startProcessingVBs = false;
 		ub = new PriorityQueue<MedicalBlock>();
@@ -421,9 +423,12 @@ class KeyWorker extends Thread implements IWorker {
 		this.socket = _socket;
 	}
 	public void initialize() {
-		System.out.println("================================DO WE HAVE ALL THE KEYS?  " + blockHolder.hasAllKeys());		
-		if (!wasMyKeySent) KeyUtils.sendKeys(blockHolder.intProcessID+ "", blockHolder.numConsortiumMembers, blockHolder.KEY_PORT_PREFIX);
-		wasMyKeySent = true;
+		if (blockHolder.intProcessID == 2) {
+			//I need to tell the servers to start exchanging keys!
+			for (int i = 0; i < blockHolder.numConsortiumMembers; i++) {
+				MessageUtils.sendMessageToServer("START!", MessageUtils.parseTargetPort(blockHolder.KEY_PORT_PREFIX, i));
+			}
+		}
 	}
 	public Boolean keepRunning() {
 		return !blockHolder.hasAllKeys();
@@ -449,18 +454,25 @@ class KeyWorker extends Thread implements IWorker {
 					sb.append(result);
 				}					
 			
-				String key = "";
-				String processId = "";
-				whatFailed = sb.toString(); //if this fails, I want to see what it was.
-				//They'll send us 1 digit for their process ID and the rest is their key.
-				if (sb.toString().length() > 0) {
-					processId = sb.toString().substring(0,1);
-					key = sb.toString().substring(1, sb.toString().length());
+				if (blockHolder.startProcessingKeys == false && sb.toString().contentEquals("START!")) {
+					blockHolder.startProcessingKeys = true;
+					KeyUtils.sendKeys(blockHolder.intProcessID, blockHolder.numConsortiumMembers, blockHolder.KEY_PORT_PREFIX);
+					wasMyKeySent = true;
+				}else {
+					String key = "";
+					String processId = "";
+					
+					whatFailed = sb.toString(); //if this fails, I want to see what it was.
+					//They'll send us 1 digit for their process ID and the rest is their key.
+					if (sb.toString().length() > 0) {
+						processId = sb.toString().substring(0,1);
+						key = sb.toString().substring(1, sb.toString().length());
+					}
+					
+					//ADDING THE KEY TO OUR KEY-ARRAY
+					Gson gsonParser = new GsonBuilder().setPrettyPrinting().create();
+					blockHolder.addKey(gsonParser.toJson(key), processId, gsonParser);
 				}
-				
-				//ADDING THE KEY TO OUR KEY-ARRAY
-				Gson gsonParser = new GsonBuilder().setPrettyPrinting().create();
-				blockHolder.addKey(gsonParser.toJson(key), processId, gsonParser);
 			}catch (NumberFormatException numex) {
 				System.out.println("Server received an invalid key from a consortium member: {" + whatFailed + "} on port " + this.socket.getLocalPort());
 			}catch (IOException iox) {
@@ -507,7 +519,8 @@ class UnverifiedBlockWorker extends Thread implements IWorker {
 		}
 	}
 	public Boolean keepRunning() {
-		return true;
+		//if we're processing blocks, then we have all the unverified ones.
+		return !blockHolder.startProcessingVBs;
 	}
 	private void sendMyUBs(int intProcessID, BlockHolder blockHolder, Gson gsonParser) {
 		PriorityQueue<MedicalBlock> fileUBs = readBlocksFromFile("BlockInput" + intProcessID + ".txt");
@@ -750,8 +763,7 @@ class MedicalBlock implements Comparable {
 		  Diag = vals[4];
 		  Treat = vals[5];
 		  Rx = vals[6];
-		  timeStamp = new Date();
-		  
+		  timeStamp = new Date();  
 	  }
 	  public String toJson() {
 		  GsonBuilder gb = new GsonBuilder();
