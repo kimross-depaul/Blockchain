@@ -655,11 +655,14 @@ class VerifiedBlockWorker extends Thread implements IWorker {
 		PrintStream out = null;
 		BufferedReader in = null;
 		try {
-			MedicalBlock topUnverifiedBlock = blockHolder.ub.poll();
-			System.out.println("WORKING ON BLOCK " + topUnverifiedBlock.toString());
-			BlockWorker blockWorker = new BlockWorker(topUnverifiedBlock, blockHolder);
-			System.out.println("created a new blockWorker, starting work.");
-			blockWorker.start();
+			BlockWorker blockWorker = null;
+			MedicalBlock topUnverifiedBlock = null;
+			
+			if (blockHolder.startProcessingVBs) {
+				topUnverifiedBlock = blockHolder.ub.poll(); 
+				blockWorker = new BlockWorker(topUnverifiedBlock, blockHolder);
+				blockWorker.start();
+			}
 			
 			in = new BufferedReader (new InputStreamReader(socket.getInputStream()));
 			out = new PrintStream(socket.getOutputStream());
@@ -680,14 +683,15 @@ class VerifiedBlockWorker extends Thread implements IWorker {
 					//ADDING UNVERIFIED BLOCKS TO THE BLOCKCHAIN (with some verification...)
 					String senderProcID = sb.toString().substring(0, 1);
 					String jsonBlock = sb.toString().substring(1, sb.toString().length());
-					System.out.println(jsonBlock);
 					String blockID = updateVerifiedBlocks(jsonBlock);
 					if (blockID == null) {
 						System.out.println("Null blockid");
 						blockHolder.printUb();
 					}
-					if (blockID.contentEquals(topUnverifiedBlock.BlockID)) {
-						blockWorker.interrupt();
+					if (blockWorker != null && topUnverifiedBlock != null) {
+						if (blockID.contentEquals(topUnverifiedBlock.BlockID)) {
+							blockWorker.interrupt();
+						}
 					}
 									
 					this.blockHolder.printVb();
@@ -742,7 +746,6 @@ class BlockWorker extends Thread {
 	}
 	public void run() {
 		try {
-			System.out.println("I'M WORKING ON A BLOCK!!!");
 		/*	//do work on the ub
 			int randval = 27; // Just some unimportant initial value
 			int tenths = 0;
@@ -759,9 +762,8 @@ class BlockWorker extends Thread {
 			System.out.println(" <-- We did " + tenths + " tenths of a second of *work*.\n");
 			ub.WinningHash = "COME BACK";*/
 			Thread.sleep(100);
-			System.out.println("solved it, kind of");
 			Gson gsonParser = new GsonBuilder().setPrettyPrinting().create();
-			MessageUtils.sendMessageToConsortium(blockHolder.intProcessID + gsonParser.toJson(ub), blockHolder.numConsortiumMembers, blockHolder.BLOCK_PORT_PREFIX);
+			if (blockHolder.intProcessID == 2) MessageUtils.sendMessageToConsortium(blockHolder.intProcessID + gsonParser.toJson(ub), blockHolder.numConsortiumMembers, blockHolder.BLOCK_PORT_PREFIX);
 		}catch (InterruptedException ex) {
 			System.out.println("Interrupted! Move on to another block.");
 		}
