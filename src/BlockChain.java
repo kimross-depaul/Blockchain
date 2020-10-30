@@ -25,6 +25,7 @@ import java.security.NoSuchProviderException;
 import java.security.PublicKey;
 import java.security.SecureRandom;
 import java.sql.Time;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.Date;
@@ -180,6 +181,11 @@ class MessageUtils {
 		String tempPort = portPrefix + processId;
 		return Integer.valueOf(tempPort);
 	}
+	public static void sendMessageToConsortium(String msg, int numConsortiumMembers, String portPrefix) {
+		for (int i=0; i < numConsortiumMembers; i++) {
+			sendMessageToServer(msg, parseTargetPort(portPrefix, i));
+		}
+	}
 	public static void sendMessageToServer(String msg, int port) {
 		Socket socket;					//Generic connection between 2 hosts
 	//	BufferedReader fromServer;		//We need to be able to read data from the server
@@ -285,6 +291,7 @@ class BlockHolder {
 		startProcessingUBs = false;
 		startProcessingVBs = false;
 		ub = new PriorityQueue<MedicalBlock>();
+		blockChain = new PriorityQueue<MedicalBlock>();
 		
 		//The arraylist didn't like being populated out of order, so let's initialize each first
 		for (int i = 0; i < numConsortiumMembers; i++) {
@@ -305,8 +312,8 @@ class BlockHolder {
 		return KeyUtils.getMyPublicKey(1);
 	}
 	public boolean hasAllKeys() {
-		System.out.println("\t====(We have " + keysReceived + " keys)");
 		if (keysReceived >= numConsortiumMembers) {
+			System.out.println("We have all the keys.  Start processing Unverified Blocks.");
 			startProcessingUBs = true;
 			return true;
 		}
@@ -335,12 +342,19 @@ class BlockHolder {
 	}
 	public void addNewUBs(ArrayList<MedicalBlock> incomingUBs) {
 		Iterator<MedicalBlock> it = incomingUBs.iterator();
+		boolean hadOne = false;
 		while (it.hasNext()) {
 			System.out.println("...adding a block");
 			ub.add(it.next());
+			hadOne = true;
 		}
-		numMembersSentUBs ++;
-		if (numMembersSentUBs == numConsortiumMembers-1) startProcessingVBs = true;
+		if (hadOne) numMembersSentUBs ++;
+		
+		//if (numMembersSentUBs == numConsortiumMembers-1) { //COME BACK
+		if (ub.size() >= 11) {
+			startProcessingVBs = true;
+			System.out.println("I have this many UBs:  " + ub.size() + ".  top block is " + ub.peek().toString());
+		}
 	}
 }
 //This accepts either a worker that serves Jokes/Proverbs or a worker that toggles nodes
@@ -574,7 +588,6 @@ class UnverifiedBlockWorker extends Thread implements IWorker {
 				//READING UNVERIFIED BLOCKS FROM THE CONSORTIUM
 				System.out.println("-----------------" + in.ready() + "--------------------------");
 				while ((result = in.readLine()) != null) {
-					System.out.println("\t" + result);
 					sb.append(result);
 				}					
 				
@@ -603,12 +616,7 @@ class UnverifiedBlockWorker extends Thread implements IWorker {
 		//Convert the json string into an ArrayList
 		Gson gson = new GsonBuilder().setPrettyPrinting().create();
 		ArrayList<MedicalBlock> incomingUBs = gson.fromJson(json, ubArray);
-		blockHolder.addNewUBs(incomingUBs);
-		
-		System.out.println("blocks so far...-------------------------");
-		this.blockHolder.printUb();
-		System.out.println("---------------------------------");
-		
+		if (incomingUBs != null) blockHolder.addNewUBs(incomingUBs);	
 	}
 }
 
@@ -636,7 +644,6 @@ class VerifiedBlockWorker extends Thread implements IWorker {
 		this.socket = _socket;
 	}
 	public void run() {
-		System.out.println("BLOCK SERVER WORKER.RUN");
 		/*
 		 * the vb server start running - it's listening for verified blocks
 		 * another thread (thread2) needs to do work on a block.
@@ -648,13 +655,11 @@ class VerifiedBlockWorker extends Thread implements IWorker {
 		PrintStream out = null;
 		BufferedReader in = null;
 		try {
-			System.out.println("getting a block...");
 			MedicalBlock topUnverifiedBlock = blockHolder.ub.poll();
-			System.out.println("got block " + topUnverifiedBlock.Lname);
-			BlockWorker blockWorker = new BlockWorker(topUnverifiedBlock);
+			System.out.println("WORKING ON BLOCK " + topUnverifiedBlock.toString());
+			BlockWorker blockWorker = new BlockWorker(topUnverifiedBlock, blockHolder);
 			System.out.println("created a new blockWorker, starting work.");
 			blockWorker.start();
-			System.out.println("Work finished.");
 			
 			in = new BufferedReader (new InputStreamReader(socket.getInputStream()));
 			out = new PrintStream(socket.getOutputStream());
@@ -673,8 +678,14 @@ class VerifiedBlockWorker extends Thread implements IWorker {
 					//no block, we're just getting started.
 				}else {					
 					//ADDING UNVERIFIED BLOCKS TO THE BLOCKCHAIN (with some verification...)
-					String blockID = updateVerifiedBlocks(sb.toString());
-					//who'd we get this from... we need to give credit  COME BACK
+					String senderProcID = sb.toString().substring(0, 1);
+					String jsonBlock = sb.toString().substring(1, sb.toString().length());
+					System.out.println(jsonBlock);
+					String blockID = updateVerifiedBlocks(jsonBlock);
+					if (blockID == null) {
+						System.out.println("Null blockid");
+						blockHolder.printUb();
+					}
 					if (blockID.contentEquals(topUnverifiedBlock.BlockID)) {
 						blockWorker.interrupt();
 					}
@@ -695,12 +706,14 @@ class VerifiedBlockWorker extends Thread implements IWorker {
 		}
 	}
 	private String updateVerifiedBlocks(String json) {
+		System.out.println("parsing this json into a block:  " + json);
 		//GSON needs to know what type of object to return
-		java.lang.reflect.Type ubArray = new TypeToken<MedicalBlock>() {}.getType();
+		java.lang.reflect.Type ub = new TypeToken<MedicalBlock>() {}.getType();
 		
 		//Convert the json string into a MedicalBlock
 		Gson gson = new GsonBuilder().setPrettyPrinting().create();
-		MedicalBlock newBlock = gson.fromJson(json, ubArray);
+		MedicalBlock newBlock = gson.fromJson(json, ub);
+		System.out.println(newBlock);		
 		
 		//validate it yourself... make sure it's good
 		boolean isValid = newBlock.validate();
@@ -721,9 +734,11 @@ class VerifiedBlockWorker extends Thread implements IWorker {
 }
 class BlockWorker extends Thread {
 	MedicalBlock ub;
+	BlockHolder blockHolder;
 	
-	public BlockWorker(MedicalBlock _ub) {
+	public BlockWorker(MedicalBlock _ub, BlockHolder _blockHolder) {
 		ub = _ub;
+		blockHolder = _blockHolder;
 	}
 	public void run() {
 		try {
@@ -745,6 +760,8 @@ class BlockWorker extends Thread {
 			ub.WinningHash = "COME BACK";*/
 			Thread.sleep(100);
 			System.out.println("solved it, kind of");
+			Gson gsonParser = new GsonBuilder().setPrettyPrinting().create();
+			MessageUtils.sendMessageToConsortium(blockHolder.intProcessID + gsonParser.toJson(ub), blockHolder.numConsortiumMembers, blockHolder.BLOCK_PORT_PREFIX);
 		}catch (InterruptedException ex) {
 			System.out.println("Interrupted! Move on to another block.");
 		}
@@ -763,7 +780,7 @@ class MedicalBlock implements Comparable {
 	  String Rx;
 ///	  String RandomSeed; // Our guess. Ultimately our winning guess.
 	  String WinningHash;
-	  Date timeStamp;
+	  Instant timeStamp;
 	  
 	//John Smith 1996.03.07 123-45-6789 Chickenpox BedRest aspirin
 
@@ -777,7 +794,7 @@ class MedicalBlock implements Comparable {
 		  Diag = vals[4];
 		  Treat = vals[5];
 		  Rx = vals[6];
-		  timeStamp = new Date();  
+		  timeStamp = new Date().toInstant(); 
 	  }
 	  public String toJson() {
 		  GsonBuilder gb = new GsonBuilder();
@@ -792,13 +809,15 @@ class MedicalBlock implements Comparable {
 	@Override
 	  public int compareTo(Object o) {
 		MedicalBlock m = (MedicalBlock)o;
-		if (m.timeStamp.before(this.timeStamp)) {
+		return this.timeStamp.compareTo(m.timeStamp);
+		
+		/*if (m.timeStamp.before(this.timeStamp)) {
 			return -1;
 		}else if (m.timeStamp.after(this.timeStamp)) {
 			return 1;
 		}else {
 			return 0; //must be the same?
-		}
+		}*/
 		
 	}
 	  public boolean validate() {
