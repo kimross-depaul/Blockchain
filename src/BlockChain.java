@@ -60,8 +60,8 @@ o Each server multicasts its unverified blocks to the other servers (listening o
 o Each server listens for the multi-casted UB's and adds them to its own PriorityQueue of UBs
 - The UB queue needs to start with one dummy block with "Previous proof of work"
 - Each server goes to work on the highest-priority block
-- First solver stamps the solved UB (proved work) and multicasts just that VB to the other servers
-- Each server updates its own local copy of the BlockChain (listening on 4930+processID)
+o First solver stamps the solved UB (proved work) and multicasts just that VB to the other servers
+o Each server updates its own local copy of the BlockChain (listening on 4930+processID)
 - Server 0 writes it to the log file.
 - EXCHANGING KEYS GAVE ME SOME TROUBLE.  TRY THIS from blockj.java
  	byte[] bytePubkey = keyPair.getPublic().getEncoded();
@@ -71,14 +71,14 @@ o Each server listens for the multi-casted UB's and adds them to its own Priorit
     System.out.println("Key in String form: " + stringKey);
 
 Other details
-- Process 2 startup triggers the running of the whole system.
+o Process 2 startup triggers the running of the whole system.
 - don't forget process 0 has to output the blockchain to BlockchainLedgerSample.json
 - blocks are verified by SHA256 hash of
 	1. previous hash
 	2. random seed
 	3. data (what is data, all the fields somehow?)
-- the "ledger is marshaled to other nodes as json"
-- credit is given to nodes for validating blocks
+o the "ledger is marshaled to other nodes as json"
+o credit is given to nodes for validating blocks
 
 
 what datatype is his timestamp
@@ -209,6 +209,39 @@ class MessageUtils {
 			//Reading and Writing can throw an IOException, which we have to handle
 			System.out.println("Error reading from server: " + iox.getMessage());
 		}
+	}
+	public static void writeToLog(String msg, int intProcessID) {
+		if (intProcessID > 0) return;
+		File logFile = new File ("BlockchainLog.txt");
+		try {
+			logFile.createNewFile();
+			FileWriter out;
+
+			out = new FileWriter("BlockchainLog.txt");
+			out.write(msg);
+			out.close();
+			
+		} catch (IOException e) {
+			System.out.println("Something bad happened while writing to the log file:  " + e.getMessage());
+		}	
+	}
+	public static void writeLedger(MyPriorityQueue blockChain, int intProcessID) {
+		if (intProcessID > 0) return;
+		GsonBuilder gsonBuilder = new GsonBuilder();
+		Gson gsonParser = new GsonBuilder().setPrettyPrinting().create();	
+
+		File logFile = new File ("BlockchainLedger.json");
+		try {
+			logFile.createNewFile();
+			FileWriter out;
+
+			out = new FileWriter("BlockchainLedger.json");
+			out.write(gsonParser.toJson(blockChain));
+			out.close();
+			
+		} catch (IOException e) {
+			System.out.println("Something bad happened while writing to the log file:  " + e.getMessage());
+		}		
 	}
 }
 class KeyUtils {
@@ -681,6 +714,11 @@ class VerifiedBlockWorker extends Thread implements IWorker {
 			out = new PrintStream(socket.getOutputStream());
 			
 			try {
+				//EVERY TIME WE RECEIVE SOMETHING WE START WORKING ON ANOTHER BLOCK
+				//INSTEAD WE NEED THEM LAUNCHED SEPARATELY.  
+				//A 4TH THREAD FROM MAIN?  
+				//2 BLOCK CHAIN THREADS. 1 TO LISTEN FOR VERIFIED BLOCKS AND 1 TO WORK ON BLOCKS
+				//WHEN THREAD 2 GETS A NEW BLOCK, IT INTERRUPTS THREAD 1.
 				BlockWorker blockWorker = null;
 				MedicalBlock topUnverifiedBlock = null;
 				
@@ -738,7 +776,7 @@ class VerifiedBlockWorker extends Thread implements IWorker {
 		//Convert the json string into a MedicalBlock
 		Gson gson = new GsonBuilder().setPrettyPrinting().create();
 		MedicalBlock newBlock = gson.fromJson(json, ub);	
-		System.out.println("We received a solved block from " + newBlock.Fname + " " + newBlock.Lname);
+		System.out.println("We received a solved block for " + newBlock.Fname + " " + newBlock.Lname + " (" + newBlock.VerificationProcessID + ")");
 		
 		//validate it yourself... make sure it's good
 		boolean isValid = newBlock.validate();
@@ -765,9 +803,9 @@ class BlockWorker extends Thread {
 	}
 	public void run() {
 		try {
-			System.out.println("88888888888888888888888888888888888888888888888888888888888888888");
+			System.out.println("\n8888888888888888888888888888888888888888888888888888888888888888");
 			System.out.println("Working on " + currentBlock.Fname + " " + currentBlock.Lname);
-		/*	//do work on the ub
+			//do work on the ub
 			int randval = 27; // Just some unimportant initial value
 			int tenths = 0;
 			Random r = new Random();
@@ -781,7 +819,7 @@ class BlockWorker extends Thread {
 				}
 			}
 			System.out.println(" <-- We did " + tenths + " tenths of a second of *work*.\n");
-			ub.WinningHash = "COME BACK";*/
+		/*	ub.WinningHash = "COME BACK";*/
 			Thread.sleep(3000);
 			currentBlock.VerificationProcessID = blockHolder.intProcessID + "";
 			Gson gsonParser = new GsonBuilder().setPrettyPrinting().create();
