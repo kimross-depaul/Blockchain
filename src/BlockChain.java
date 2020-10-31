@@ -325,9 +325,20 @@ class MyPriorityQueue {
 	}
 	public void print() {
 		Iterator<MedicalBlock> it = pq.iterator();
+		System.out.println("-------------------------------------");
 		while (it.hasNext()) {
 			MedicalBlock b = it.next();
-		//	System.out.println("==" + b.Fname + " " + b.Lname + " (" + b.VerificationProcessID + ")");
+			System.out.println("==" + b.Fname + " " + b.Lname + " (" + b.VerificationProcessID + ")");
+		}
+		System.out.println("-------------------------------------");
+	}
+	public void remove(MedicalBlock m) {
+		Iterator<MedicalBlock> it = pq.iterator();
+		while (it.hasNext()) {
+			MedicalBlock thisBlock = it.next();
+			if (thisBlock.BlockID.contentEquals(m.BlockID)) {
+				pq.remove(thisBlock);
+			}
 		}
 	}
 }
@@ -423,7 +434,7 @@ class BlockHolder {
 	}
 	public void startCurrentWork() {
 		if (currentWork == null && startProcessingVBs) {
-			System.out.println("\tStarting Current Work (" + currentWork + "," + startProcessingVBs + ")");
+			TimeStamper.printNow("\tStarting Current Work (" + currentWork + "," + startProcessingVBs + ")");
 			MedicalBlock topUnverifiedBlock = ub.poll(); 
 			if (topUnverifiedBlock == null) {
 				weAreDone = true;
@@ -787,7 +798,7 @@ class VerifiedBlockWorker extends Thread implements IWorker {
 					}
 					*/
 									
-					this.blockHolder.blockChain.print();
+					//this.blockHolder.blockChain.print();
 				}
 
 			}catch (NumberFormatException numex) {
@@ -809,7 +820,7 @@ class VerifiedBlockWorker extends Thread implements IWorker {
 		//Convert the json string into a MedicalBlock
 		Gson gson = new GsonBuilder().setPrettyPrinting().create();
 		MedicalBlock newBlock = gson.fromJson(json, ub);	
-		System.out.println("We received a solved block for " + newBlock.Fname + " " + newBlock.Lname + " (" + newBlock.VerificationProcessID + ")");
+		TimeStamper.printNow("We received a solved block for " + newBlock.Fname + " " + newBlock.Lname + " (" + newBlock.VerificationProcessID + ")");
 		
 		//validate it yourself... make sure it's good
 		boolean isValid = newBlock.validate();
@@ -818,10 +829,10 @@ class VerifiedBlockWorker extends Thread implements IWorker {
 		if (isValid) {
 			blockHolder.stopCurrentWork();
 			blockHolder.blockChain.add(newBlock);
-			
+			blockHolder.ub.remove(newBlock); //make sure we don't process this block if we're late getting to it			
 		}
 				
-		this.blockHolder.blockChain.print();
+		//this.blockHolder.blockChain.print();
 		if (isValid) {
 			return newBlock.BlockID;
 		}else {
@@ -841,7 +852,7 @@ class BlockWorker extends Thread {
 	public void run() {
 		try {
 			System.out.println("\n8888888888888888888888888888888888888888888888888888888888888888");
-			System.out.println("Working on " + currentBlock.Fname + " " + currentBlock.Lname);
+			TimeStamper.printNow("Working on " + currentBlock.Fname + " " + currentBlock.Lname );
 			//do work on the ub
 			int randval = 27; // Just some unimportant initial value
 			int tenths = 0;
@@ -861,6 +872,7 @@ class BlockWorker extends Thread {
 			currentBlock.VerificationProcessID = blockHolder.intProcessID + "";
 			Gson gsonParser = new GsonBuilder().setPrettyPrinting().create();
 			System.out.println("I SOLVED " + currentBlock.Fname + " " + currentBlock.Lname + "!");
+			//COME BACK:  We need to hash things in this block and its predecesor before sending it to the consortium
 			MessageUtils.sendMessageToConsortium(blockHolder.intProcessID + gsonParser.toJson(currentBlock), blockHolder.numConsortiumMembers, blockHolder.BLOCK_PORT_PREFIX);
 		}catch (InterruptedException ex) {
 			System.out.println("***************************** Interrupted! Move on to another block ************************************");
@@ -942,3 +954,10 @@ class MedicalBlock implements Comparable {
 	  }
 }	
 
+class TimeStamper {
+	static void printNow(String msg) {
+		java.text.SimpleDateFormat formatter= new java.text.SimpleDateFormat("HH:mm:ss z");
+		java.util.Date date = new java.util.Date(System.currentTimeMillis());
+		System.out.println(msg + " at " + formatter.format(date));		
+	}
+}
