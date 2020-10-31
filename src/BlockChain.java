@@ -173,7 +173,15 @@ public class BlockChain extends Thread {
 		keyServer.start();
 		UBserver.start();
 		blockChainServer.start();
-				
+		
+		do {
+			Thread.sleep(5000);
+			if (blockHolder.startProcessingVBs) {
+				blockHolder.startCurrentWork();
+			}			
+		} while (!blockHolder.weAreDone);
+		blockHolder.blockChain.print();
+		MessageUtils.sendMessageToConsortium("DONE!", NUM_CONSORTIUM_MEMBERS, BLOCK_PORT_PREFIX);
 	}
 }
 class MessageUtils {
@@ -326,6 +334,7 @@ class MyPriorityQueue {
 class BlockHolder {
 	MyPriorityQueue ub;
 	MyPriorityQueue blockChain;
+	BlockWorker currentWork;
 	//ArrayList<PublicKey> consortiumKeys; //COME BACK
 	// CONSIDER STORING ONLY THE KEY.GETMODULUS() AND KEY.GETpUBLICEXPONENT() RATHER THAN SERIALIZNG THE PUBLICKEY OBJECT, WHICH I CANT SEEM TO DO
 	ArrayList<String> consortiumKeys;
@@ -340,6 +349,7 @@ class BlockHolder {
 	boolean startProcessingKeys;
 	boolean startProcessingUBs;
 	boolean startProcessingVBs;
+	boolean weAreDone; //COME BACK.  WE NEED TO SET THIS TO TRUE WHEN THE BLOCKCHAIN IS FULL.
 	
 	public BlockHolder(int _numConsortiumMembers, String _KEY_PORT_PREFIX, String _UB_PORT_PREFIX, String _BLOCK_PORT_PREFIX, int _intProcessID) {
 		//consortiumKeys = new ArrayList<PublicKey>(_numConsortiumMembers); //COME BACK
@@ -355,6 +365,7 @@ class BlockHolder {
 		startProcessingKeys = false;
 		startProcessingUBs = false;
 		startProcessingVBs = false;
+		weAreDone = false;
 		ub = new MyPriorityQueue();
 		blockChain = new MyPriorityQueue();
 		
@@ -402,6 +413,25 @@ class BlockHolder {
 		if (ub.size() >= 11) {
 			startProcessingVBs = true;
 			System.out.println("I have this many UBs:  " + ub.size() + ".  top block is " + ub.peek().toString());
+		}
+	}
+	public void stopCurrentWork() {
+		if (currentWork != null) {
+			currentWork.interrupt();
+			currentWork = null;
+		}
+	}
+	public void startCurrentWork() {
+		if (currentWork == null && startProcessingVBs) {
+			System.out.println("\tStarting Current Work (" + currentWork + "," + startProcessingVBs + ")");
+			MedicalBlock topUnverifiedBlock = ub.poll(); 
+			if (topUnverifiedBlock == null) {
+				weAreDone = true;
+				startProcessingVBs = false;
+			}else {
+				currentWork = new BlockWorker(topUnverifiedBlock, this);
+				currentWork.start(); 
+			}
 		}
 	}
 }
@@ -686,8 +716,7 @@ class VerifiedBlockWorker extends Thread implements IWorker {
 		MessageUtils.sendMessageToServer("START!", MessageUtils.parseTargetPort(blockHolder.BLOCK_PORT_PREFIX, blockHolder.intProcessID));
 	}
 	public Boolean keepRunning() {
-		//return blockHolder.ub.peek() != null;
-		return true;
+		return !blockHolder.weAreDone;
 	}
 	@Override
 	public void setSocket(Socket _socket) {
@@ -719,7 +748,7 @@ class VerifiedBlockWorker extends Thread implements IWorker {
 				//A 4TH THREAD FROM MAIN?  
 				//2 BLOCK CHAIN THREADS. 1 TO LISTEN FOR VERIFIED BLOCKS AND 1 TO WORK ON BLOCKS
 				//WHEN THREAD 2 GETS A NEW BLOCK, IT INTERRUPTS THREAD 1.
-				BlockWorker blockWorker = null;
+				/*BlockWorker blockWorker = null;
 				MedicalBlock topUnverifiedBlock = null;
 				
 				if (blockHolder.startProcessingVBs) {
@@ -727,9 +756,9 @@ class VerifiedBlockWorker extends Thread implements IWorker {
 					blockWorker = new BlockWorker(topUnverifiedBlock, blockHolder);
 					blockWorker.start();
 				}
+				*/
 				
-				
-				//Get the Joke/Proverb our client is requesting
+				//Get the blocks the consortium has solved
 				StringBuilder sb = new StringBuilder();
 				String result = "";
 				
@@ -739,7 +768,11 @@ class VerifiedBlockWorker extends Thread implements IWorker {
 				}					
 				
 				if (sb.toString().contentEquals("START!")) {
-					//no block, we're just getting started.
+					//Other forms of communication:  signal to start or end
+					//We accept these without processing a block (there isn't one in this message)
+					blockHolder.startProcessingVBs = true;
+				}else if (sb.toString().contentEquals("DONE!")) {
+					blockHolder.weAreDone = true;
 				}else {					
 					//ADDING UNVERIFIED BLOCKS TO THE BLOCKCHAIN (with some verification...)
 					String senderProcID = sb.toString().substring(0, 1);
@@ -747,12 +780,12 @@ class VerifiedBlockWorker extends Thread implements IWorker {
 					String blockID = updateVerifiedBlocks(jsonBlock);
 
 					//IF WE'RE STILL WORKING ON THAT BLOCK, INTERRUPT US.
-					System.out.println("Does " + blockID.substring(0, 4) + " = " + topUnverifiedBlock.BlockID.substring(0, 4) + "???");
-					if (blockID.contentEquals(topUnverifiedBlock.BlockID)) {
+					//System.out.println("Does " + blockID.substring(0, 4) + " = " + topUnverifiedBlock.BlockID.substring(0, 4) + "???");
+					/*if (blockID.contentEquals(topUnverifiedBlock.BlockID)) {
 						System.out.println("STOP WORKING ON THIS BLOCK - YOU LOST!");
 						blockWorker.interrupt();
 					}
-
+					*/
 									
 					this.blockHolder.blockChain.print();
 				}
@@ -781,9 +814,13 @@ class VerifiedBlockWorker extends Thread implements IWorker {
 		//validate it yourself... make sure it's good
 		boolean isValid = newBlock.validate();
 		
-		//Add it to the PriorityQueue
-		if (isValid) blockHolder.blockChain.add(newBlock);
-		
+		//Add to the chain
+		if (isValid) {
+			blockHolder.stopCurrentWork();
+			blockHolder.blockChain.add(newBlock);
+			
+		}
+				
 		this.blockHolder.blockChain.print();
 		if (isValid) {
 			return newBlock.BlockID;
