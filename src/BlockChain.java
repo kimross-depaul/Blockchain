@@ -11,7 +11,7 @@ import com.google.gson.JsonSerializationContext;
 import com.google.gson.JsonSerializer;
 import com.google.gson.reflect.TypeToken;
 
-import sun.security.rsa.RSAPublicKeyImpl;
+
 
 import java.io.BufferedReader;
 import java.io.File;
@@ -357,7 +357,7 @@ class KeyUtils {
 		}
 		return false;
 	}
-	public static String encryptIt(String data) {
+	public static String encryptIt(String data) throws NoSuchAlgorithmException {
 		MessageDigest md = MessageDigest.getInstance("SHA-256");
 	   	md.update (data.getBytes());
 	    byte byteData[] = md.digest();
@@ -375,6 +375,9 @@ class MyPriorityQueue {
 	
 	public MyPriorityQueue() {
 		pq = new PriorityQueue<MedicalBlock>();
+	}
+	public void addFakeBlock() throws NoSuchAlgorithmException {
+		pq.add(new MedicalBlock());
 	}
 	public boolean add(MedicalBlock m) {
 		Iterator<MedicalBlock> it = pq.iterator();
@@ -405,15 +408,19 @@ class MyPriorityQueue {
 		System.out.println("-------------------------------------");
 	}
 	public void remove(MedicalBlock m) {
-		synchronized(pq) {
+		synchronized(this) {
 			Iterator<MedicalBlock> it = pq.iterator();
 			while (it.hasNext()) {
 				MedicalBlock thisBlock = it.next();
 				if (thisBlock.BlockID.contentEquals(m.BlockID)) {
 					pq.remove(thisBlock);
+					break;
 				}
 			}
 		}
+	}
+	public String getTopHash() {
+		return pq.peek().WinningHash;
 	}
 }
 class BlockHolder {
@@ -437,7 +444,7 @@ class BlockHolder {
 	boolean startProcessingVBs;
 	boolean weAreDone; //COME BACK.  WE NEED TO SET THIS TO TRUE WHEN THE BLOCKCHAIN IS FULL.
 	
-	public BlockHolder(int _numConsortiumMembers, String _KEY_PORT_PREFIX, String _UB_PORT_PREFIX, String _BLOCK_PORT_PREFIX, int _intProcessID) {
+	public BlockHolder(int _numConsortiumMembers, String _KEY_PORT_PREFIX, String _UB_PORT_PREFIX, String _BLOCK_PORT_PREFIX, int _intProcessID) throws NoSuchAlgorithmException {
 		consortiumKeys = new ArrayList<PublicKey>(_numConsortiumMembers); //COME BACK
 		//consortiumKeys = new ArrayList<String>(_numConsortiumMembers);
 		numConsortiumMembers = _numConsortiumMembers;
@@ -454,6 +461,7 @@ class BlockHolder {
 		weAreDone = false;
 		ub = new MyPriorityQueue();
 		blockChain = new MyPriorityQueue();
+		blockChain.addFakeBlock();
 		myKeyPair = KeyUtils.generateKeyPair(intProcessID);
 		
 		//The arraylist didn't like being populated out of order, so let's initialize each first
@@ -500,10 +508,10 @@ class BlockHolder {
 		}
 		if (hadOne) numMembersSentUBs ++;
 		
-		//if (numMembersSentUBs == numConsortiumMembers-1) { //COME BACK
-		if (ub.size() >= 11) {
+		if (numMembersSentUBs >= numConsortiumMembers) {
+//		if (ub.size() >= 11) {
 			startProcessingVBs = true;
-			System.out.println("I have this many UBs:  " + ub.size() + ".  top block is " + ub.peek().toString());
+			System.out.println("I have this many UBs from " + numMembersSentUBs + " members:  " + ub.size() + ".  top block is " + ub.peek().toString());
 		}
 	}
 	public void stopCurrentWork() {
@@ -865,7 +873,7 @@ class VerifiedBlockWorker extends Thread implements IWorker {
 				}else if (sb.toString().contentEquals("DONE!")) {
 					blockHolder.weAreDone = true;
 				}else {					
-					//ADDING UNVERIFIED BLOCKS TO THE BLOCKCHAIN (with some verification...)
+					//ADDING BLOCKS VERIFIED BY SOMEONE ELSE TO THE BLOCKCHAIN (with some verification...)
 					String senderProcID = sb.toString().substring(0, 1);
 					String jsonBlock = sb.toString().substring(1, sb.toString().length());
 					String blockID = updateVerifiedBlocks(jsonBlock);
@@ -893,7 +901,7 @@ class VerifiedBlockWorker extends Thread implements IWorker {
 			System.out.println("Server encountered a read or write error:  " + ioe.getMessage());
 		}
 	}
-	private String updateVerifiedBlocks(String json) {
+	private String updateVerifiedBlocks(String json)  {
 		//GSON needs to know what type of object to return
 		java.lang.reflect.Type ub = new TypeToken<MedicalBlock>() {}.getType();
 		
@@ -903,13 +911,20 @@ class VerifiedBlockWorker extends Thread implements IWorker {
 		TimeStamper.printNow("We received a solved block for " + newBlock.Fname + " " + newBlock.Lname + " (" + newBlock.VerificationProcessID + ")");
 		
 		//validate it yourself... make sure it's good
-		boolean isValid = newBlock.validate();
-		
+		boolean isValid = false;
+		try {
+			isValid = newBlock.validate();
+		} catch (NoSuchAlgorithmException e) {
+			System.out.println("Encryption not supported:  " + e.getMessage());
+		}
+				
 		//Add to the chain
 		if (isValid) {
 			blockHolder.stopCurrentWork();
 			blockHolder.blockChain.add(newBlock);
 			blockHolder.ub.remove(newBlock); //make sure we don't process this block if we're late getting to it			
+		}else {
+			System.out.println("<<<<<<<<<<< THIS BLOCK DOESN'T PASS VALIDATION!!!>>>>>>>>>>");
 		}
 				
 		//this.blockHolder.blockChain.print();
@@ -946,17 +961,24 @@ class BlockWorker extends Thread {
 				}
 			}
 			System.out.println(" <-- We did " + tenths + " tenths of a second of *work*.\n");
-		/*	ub.WinningHash = "COME BACK";*/
-			//So let's make randval the winning seed
-			currentBlock.WinningHash = randval + "";
-			Thread.sleep(3000);
+
+			currentBlock.RandomSeed = randval + "";
+			//winning hash = prev hash + seed + block data 
+			currentBlock.PreviousHash = blockHolder.blockChain.getTopHash();
+			String toHash = currentBlock.PreviousHash + randval + currentBlock.toString();
+			String encrypted = KeyUtils.encryptIt(toHash);
+			currentBlock.WinningHash = encrypted;			
+			
+//			Thread.sleep(3000);
 			currentBlock.VerificationProcessID = blockHolder.intProcessID + "";
 			Gson gsonParser = new GsonBuilder().setPrettyPrinting().create();
 			System.out.println("I SOLVED " + currentBlock.Fname + " " + currentBlock.Lname + "!");
 			//COME BACK:  We need to hash things in this block and its predecesor before sending it to the consortium
 			MessageUtils.sendMessageToConsortium(blockHolder.intProcessID + gsonParser.toJson(currentBlock), blockHolder.numConsortiumMembers, blockHolder.BLOCK_PORT_PREFIX);
-		}catch (InterruptedException ex) {
+		}catch (InterruptedException ie) {
 			System.out.println("***************************** Interrupted! Move on to another block ************************************");
+		}catch (NoSuchAlgorithmException ex) {
+			System.out.println("Encryption method not supported:  " + ex.getMessage());
 		}
 	}
 }
@@ -988,17 +1010,18 @@ class MedicalBlock implements Comparable {
 	  String Diag;
 	  String Treat;
 	  String Rx;
-///	  String RandomSeed; // Our guess. Ultimately our winning guess.
+	  String RandomSeed; // Our guess. Ultimately our winning guess.
 	  String WinningHash;
 	  String timeStamp;
 	  byte[] signedByCreator;
+	 
 	  
 	//John Smith 1996.03.07 123-45-6789 Chickenpox BedRest aspirin
 
 	  public MedicalBlock(String fileInput, String procID) {
 		  String[] vals = fileInput.split(" ");
 		  BlockID = UUID.randomUUID().toString();
-		  byte[] signedByCreator = KeyUtils.signThis(BlockID.getBytes(), KeyUtils.getMyPrivateKey(Long.valueOf(procID)));
+		  signedByCreator = KeyUtils.signThis(BlockID.getBytes(), KeyUtils.getMyPrivateKey(Long.valueOf(procID)));
 		  Fname = vals[0];
 		  Lname = vals[1];
 		  DOB = vals[2];
@@ -1012,18 +1035,35 @@ class MedicalBlock implements Comparable {
 		  String T1 = String.format("%1$s %2$tF.%2$tT", "", date); // Create the TimeStamp string.	  
 		  timeStamp = T1 + "." + procID; 
 	  }
-	  public String toJson() {
+	public MedicalBlock() throws NoSuchAlgorithmException { //For initial fake block;
+		BlockID = UUID.randomUUID().toString();
+		signedByCreator = KeyUtils.signThis(BlockID.getBytes(), KeyUtils.getMyPrivateKey(Long.valueOf(0)));
+		VerificationProcessID = "0";
+		PreviousHash = "1";
+		Fname = "Kim";
+		Lname = "Ross";
+		DOB = "11/11/1970";
+		SSNum="111-111-1111";
+		Diag = "Healthy";
+		Treat = "Ice Cream";
+		Rx = "Coffee";
+		Date date = new Date();
+		String T1 = String.format("%1$s %2$tF.%2$tT", "", date); // Create the TimeStamp string.	  
+		timeStamp = T1 + "." + 0; 
+		RandomSeed = "0";
+		String toHash = "1" + "0" + this.toString();
+		String encrypted = KeyUtils.encryptIt(toHash);
+		WinningHash = encrypted;
+
+	}
+	public String toJson() {
 		  GsonBuilder gb = new GsonBuilder();
 		  gb.setPrettyPrinting();
 		  Gson gson = gb.create();
 		  return gson.toJson(this);
 	  }
-  	  @Override
-	  public String toString() {
-		  return BlockID + " " + VerificationProcessID + " " + PreviousHash + " " + Fname + " " + Lname;
-	  }
 	@Override
-	  public int compareTo(Object o) {
+	public int compareTo(Object o) {
 		MedicalBlock m = (MedicalBlock)o;
 		return this.timeStamp.compareTo(m.timeStamp);
 		
@@ -1036,22 +1076,22 @@ class MedicalBlock implements Comparable {
 		}*/
 		
 	}
-	  public boolean validate() {
+	public boolean validate() throws NoSuchAlgorithmException {
 		  //COME BACK
 		  //NEED TO CHECK THAT THE WINNING HASH WORKS PROPERLY
-		  return true;
-	  }
-	  private void setSeed() {
-		  //Credit to Clark Elliot's BlockJ Sample Code 
-		  Random rr = new Random(); // 
-		  int rval = rr.nextInt(21472);
-		  String randSeed = String.format("%06X", rval & 0x0FFFFFF);  // Mask off all but trailing 6 chars.
-		  
-		  rval = rr.nextInt(21472);
-		  
-		  String randSeed2 = Integer.toHexString(rval);
-		  //RandomSeed = randSeed2;
-	  }
+//			prev hash + seed + data will equal the re-hash of that
+		String toCheck = PreviousHash + RandomSeed + this.toString();
+		String encrypted = KeyUtils.encryptIt(toCheck);
+		
+		return encrypted.contentEquals( WinningHash);
+	}
+	@Override
+	public String toString() {
+		String s = "|";
+		return BlockID + s + VerificationProcessID + s + PreviousHash + s + Fname + s + Lname + s + DOB + s + SSNum + s 
+				+ Diag + s + Treat + s + Rx + s + RandomSeed + s + timeStamp + s + signedByCreator.toString();
+			
+	}
 }	
 
 class TimeStamper {
