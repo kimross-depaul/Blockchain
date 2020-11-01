@@ -4,9 +4,14 @@ import com.google.gson.InstanceCreator;
 import com.google.gson.JsonDeserializationContext;
 import com.google.gson.JsonDeserializer;
 import com.google.gson.JsonElement;
+import com.google.gson.JsonObject;
 import com.google.gson.JsonParseException;
 import com.google.gson.JsonPrimitive;
+import com.google.gson.JsonSerializationContext;
+import com.google.gson.JsonSerializer;
 import com.google.gson.reflect.TypeToken;
+
+import sun.security.rsa.RSAPublicKeyImpl;
 
 import java.io.BufferedReader;
 import java.io.File;
@@ -18,12 +23,17 @@ import java.lang.reflect.Type;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.net.UnknownHostException;
+import java.security.InvalidKeyException;
 import java.security.KeyPair;
 import java.security.KeyPairGenerator;
+import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.security.NoSuchProviderException;
+import java.security.PrivateKey;
 import java.security.PublicKey;
 import java.security.SecureRandom;
+import java.security.Signature;
+import java.security.SignatureException;
 import java.sql.Time;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -153,7 +163,7 @@ public class BlockChain extends Thread {
 	public static String UB_PORT_PREFIX = "482";
 	public static String BLOCK_PORT_PREFIX = "493";
 
-	public static void main(String[] args) throws InterruptedException {
+	public static void main(String[] args) throws InterruptedException, NoSuchAlgorithmException {	
 		//Read data from text file
 		String ProcessID = "0";
 		if (args.length > 0) ProcessID = args[0];
@@ -182,6 +192,7 @@ public class BlockChain extends Thread {
 		} while (!blockHolder.weAreDone);
 		blockHolder.blockChain.print();
 		MessageUtils.sendMessageToConsortium("DONE!", NUM_CONSORTIUM_MEMBERS, BLOCK_PORT_PREFIX);
+		
 	}
 }
 class MessageUtils {
@@ -218,6 +229,18 @@ class MessageUtils {
 			System.out.println("Error reading from server: " + iox.getMessage());
 		}
 	}
+	/*public static void sendObjectToServer(Object obj, int port) {
+		Socket socket = new Socket ("localhost", port);
+		ObjectOutputStream objStream= new ObjectOutputStream(socket.getOutputStream());
+		objStream.writeObject(obj);
+		objStream.close();
+	}
+	public static Object getObjectFromServer(int port) {
+		Socket socket = new Socket("localhost", port);
+	//	BufferedReader fromServer = new BufferedReader(new InputStreamReader(socket.getInputStream()));
+		ObjectInputStream objStream = new ObjectInputStream(socket.getInputStream());
+		return objStream.readObject();
+	}*/
 	public static void writeToLog(String msg, int intProcessID) {
 		if (intProcessID > 0) return;
 		File logFile = new File ("BlockchainLog.txt");
@@ -270,6 +293,10 @@ class KeyUtils {
 		KeyPair keyPair = generateKeyPair(seed);
 		return keyPair.getPublic();
 	}
+	public static PrivateKey getMyPrivateKey(long seed) {
+		KeyPair keyPair = generateKeyPair(seed);
+		return keyPair.getPrivate();
+	}
 	//Makes a key pair so I can extract the public key
 	public static KeyPair generateKeyPair(long seed)  {
 	    KeyPairGenerator keyGenerator = null;
@@ -293,9 +320,54 @@ class KeyUtils {
 		PublicKey myKey = KeyUtils.getMyPublicKey(intProcessID);
 		for (int i = 0; i < numConsortiumMembers; i++) {
 			//COME BACK TO THIS
-			//sendMessageToServer(myProcessID + gsonParser.toJson(myKey), parseTargetPort(KEY_PORT_PREFIX, i));
+			Gson gsonParser = new GsonBuilder().setPrettyPrinting().create();	
 			MessageUtils.sendMessageToServer(intProcessID + myKey.toString(), MessageUtils.parseTargetPort(keyPortPrefix, i));
 		}		
+	}
+	//Courtesy of Clark Elliot's BlockJ Sample Code
+	public static byte[] signThis(byte[] dataToSign, PrivateKey privateKey) {
+		Signature signer;
+		try {
+			signer = Signature.getInstance("SHA1withRSA");
+			signer.initSign(privateKey);
+			signer.update(dataToSign);
+			return signer.sign();
+		} catch (NoSuchAlgorithmException ae) {
+			ae.printStackTrace();
+		} catch (InvalidKeyException ke) {
+			ke.printStackTrace();
+		} catch (SignatureException se) {
+			se.printStackTrace();
+		}
+		return null;
+	}
+	public static boolean verifySignature(byte[] dataThatsSigned, PublicKey publicKey, byte[] digitalSignature ) {
+	    Signature signer;
+		try {
+			signer = Signature.getInstance("SHA1withRSA");
+			signer.initVerify(publicKey);
+			signer.update(dataThatsSigned);
+			return (signer.verify(digitalSignature));
+		} catch (NoSuchAlgorithmException e) {
+			e.printStackTrace();
+		} catch (InvalidKeyException e) {
+			e.printStackTrace();
+		} catch (SignatureException e) {
+			e.printStackTrace();
+		}
+		return false;
+	}
+	public static String encryptIt(String data) {
+		MessageDigest md = MessageDigest.getInstance("SHA-256");
+	   	md.update (data.getBytes());
+	    byte byteData[] = md.digest();
+		
+	    StringBuffer sb = new StringBuffer();
+	    for (int i = 0; i < byteData.length; i++) {
+	      sb.append(Integer.toString((byteData[i] & 0xff) + 0x100, 16).substring(1));
+	    }
+    
+	    return sb.toString();
 	}
 }
 class MyPriorityQueue {
@@ -333,11 +405,13 @@ class MyPriorityQueue {
 		System.out.println("-------------------------------------");
 	}
 	public void remove(MedicalBlock m) {
-		Iterator<MedicalBlock> it = pq.iterator();
-		while (it.hasNext()) {
-			MedicalBlock thisBlock = it.next();
-			if (thisBlock.BlockID.contentEquals(m.BlockID)) {
-				pq.remove(thisBlock);
+		synchronized(pq) {
+			Iterator<MedicalBlock> it = pq.iterator();
+			while (it.hasNext()) {
+				MedicalBlock thisBlock = it.next();
+				if (thisBlock.BlockID.contentEquals(m.BlockID)) {
+					pq.remove(thisBlock);
+				}
 			}
 		}
 	}
@@ -346,9 +420,9 @@ class BlockHolder {
 	MyPriorityQueue ub;
 	MyPriorityQueue blockChain;
 	BlockWorker currentWork;
-	//ArrayList<PublicKey> consortiumKeys; //COME BACK
+	ArrayList<PublicKey> consortiumKeys; //COME BACK
 	// CONSIDER STORING ONLY THE KEY.GETMODULUS() AND KEY.GETpUBLICEXPONENT() RATHER THAN SERIALIZNG THE PUBLICKEY OBJECT, WHICH I CANT SEEM TO DO
-	ArrayList<String> consortiumKeys;
+	//ArrayList<String> consortiumKeys;
 	int numConsortiumMembers;
 	String KEY_PORT_PREFIX = "471";
 	String UB_PORT_PREFIX = "482";
@@ -356,6 +430,7 @@ class BlockHolder {
 	int intProcessID;
 	int keysReceived;
 	int numMembersSentUBs;
+	KeyPair myKeyPair;
 	boolean wereUBsSent;
 	boolean startProcessingKeys;
 	boolean startProcessingUBs;
@@ -363,8 +438,8 @@ class BlockHolder {
 	boolean weAreDone; //COME BACK.  WE NEED TO SET THIS TO TRUE WHEN THE BLOCKCHAIN IS FULL.
 	
 	public BlockHolder(int _numConsortiumMembers, String _KEY_PORT_PREFIX, String _UB_PORT_PREFIX, String _BLOCK_PORT_PREFIX, int _intProcessID) {
-		//consortiumKeys = new ArrayList<PublicKey>(_numConsortiumMembers); //COME BACK
-		consortiumKeys = new ArrayList<String>(_numConsortiumMembers);
+		consortiumKeys = new ArrayList<PublicKey>(_numConsortiumMembers); //COME BACK
+		//consortiumKeys = new ArrayList<String>(_numConsortiumMembers);
 		numConsortiumMembers = _numConsortiumMembers;
 		KEY_PORT_PREFIX = _KEY_PORT_PREFIX;
 		UB_PORT_PREFIX = _UB_PORT_PREFIX;
@@ -379,6 +454,7 @@ class BlockHolder {
 		weAreDone = false;
 		ub = new MyPriorityQueue();
 		blockChain = new MyPriorityQueue();
+		myKeyPair = KeyUtils.generateKeyPair(intProcessID);
 		
 		//The arraylist didn't like being populated out of order, so let's initialize each first
 		for (int i = 0; i < numConsortiumMembers; i++) {
@@ -391,7 +467,11 @@ class BlockHolder {
 		java.lang.reflect.Type publicKey = new TypeToken<PublicKey>() {}.getType();
 		
 		//COME BACK
-		consortiumKeys.set(Integer.valueOf(processId), key); //gsonParser.fromJson(key, publicKey));
+		//consortiumKeys.set(Integer.valueOf(processId), key); //gsonParser.fromJson(key, publicKey));
+		//PublicKey temp = gsonParser.fromJson(key,  publicKey);
+		//consortiumKeys.set(Integer.valueOf(processId),  temp);
+		consortiumKeys.set(Integer.valueOf(processId), KeyUtils.getMyPublicKey(0));
+
 		keysReceived ++;
 	}
 	public PublicKey getKey(int pos) {
@@ -837,8 +917,7 @@ class VerifiedBlockWorker extends Thread implements IWorker {
 			return newBlock.BlockID;
 		}else {
 			return "";
-		}
-		
+		}	
 	}
 }
 class BlockWorker extends Thread {
@@ -868,6 +947,8 @@ class BlockWorker extends Thread {
 			}
 			System.out.println(" <-- We did " + tenths + " tenths of a second of *work*.\n");
 		/*	ub.WinningHash = "COME BACK";*/
+			//So let's make randval the winning seed
+			currentBlock.WinningHash = randval + "";
 			Thread.sleep(3000);
 			currentBlock.VerificationProcessID = blockHolder.intProcessID + "";
 			Gson gsonParser = new GsonBuilder().setPrettyPrinting().create();
@@ -880,6 +961,23 @@ class BlockWorker extends Thread {
 	}
 }
 class MedicalBlock implements Comparable {
+	//I need to sign the blockID with the creator's key
+	//The 3 things to combine for verifying a block are:
+	/*
+	 * 	Previous Hash
+	 *  random seed
+	 *  data
+	 * 
+	 * Start by producing S
+	 * 		Concatenate SHA-256 hash of previous block
+	 * 		Data in the current block
+	 * 		A random string R
+	 * 
+	 * Then Hash S, producing S-HASH
+	 * 
+	 * 
+	 * 
+	 */
 	  String BlockID;
 	  String VerificationProcessID;
 	  String PreviousHash; 
@@ -893,12 +991,14 @@ class MedicalBlock implements Comparable {
 ///	  String RandomSeed; // Our guess. Ultimately our winning guess.
 	  String WinningHash;
 	  String timeStamp;
+	  byte[] signedByCreator;
 	  
 	//John Smith 1996.03.07 123-45-6789 Chickenpox BedRest aspirin
 
 	  public MedicalBlock(String fileInput, String procID) {
 		  String[] vals = fileInput.split(" ");
 		  BlockID = UUID.randomUUID().toString();
+		  byte[] signedByCreator = KeyUtils.signThis(BlockID.getBytes(), KeyUtils.getMyPrivateKey(Long.valueOf(procID)));
 		  Fname = vals[0];
 		  Lname = vals[1];
 		  DOB = vals[2];
