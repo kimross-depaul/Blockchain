@@ -24,6 +24,7 @@ import java.net.ServerSocket;
 import java.net.Socket;
 import java.net.UnknownHostException;
 import java.security.InvalidKeyException;
+import java.security.KeyFactory;
 import java.security.KeyPair;
 import java.security.KeyPairGenerator;
 import java.security.MessageDigest;
@@ -34,6 +35,8 @@ import java.security.PublicKey;
 import java.security.SecureRandom;
 import java.security.Signature;
 import java.security.SignatureException;
+import java.security.spec.InvalidKeySpecException;
+import java.security.spec.X509EncodedKeySpec;
 import java.sql.Time;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -44,6 +47,8 @@ import java.util.PriorityQueue;
 import java.util.Random;
 import java.util.Scanner;
 import java.util.UUID;
+
+import javax.crypto.Cipher;
 
 /*
  * Classes I'll need
@@ -316,13 +321,32 @@ class KeyUtils {
 	    
 	    return (keyGenerator.generateKeyPair());
 	}
+	public PublicKey getPublicKey(int intProcessID, BlockHolder blockHolder) {
+		return blockHolder.getKey(intProcessID);
+	}
 	public static void sendKeys(int intProcessID, int numConsortiumMembers, String keyPortPrefix) {
-		PublicKey myKey = KeyUtils.getMyPublicKey(intProcessID);
+		//We send it encoded
+		PublicKey temp = KeyUtils.getMyPublicKey(intProcessID);
+	    byte[] bytePubkey = temp.getEncoded();
+	    String stringKey = Base64.getEncoder().encodeToString(bytePubkey);
+		
 		for (int i = 0; i < numConsortiumMembers; i++) {
 			//COME BACK TO THIS
 			Gson gsonParser = new GsonBuilder().setPrettyPrinting().create();	
-			MessageUtils.sendMessageToServer(intProcessID + myKey.toString(), MessageUtils.parseTargetPort(keyPortPrefix, i));
+			MessageUtils.sendMessageToServer(intProcessID + stringKey, MessageUtils.parseTargetPort(keyPortPrefix, i));
 		}		
+	}
+	public static PublicKey decodeKey(String stringKey) {
+		//We get it as an encoded string and turn it back into a PublicKey
+	    byte[] bytePubkey2  = Base64.getDecoder().decode(stringKey);
+	    X509EncodedKeySpec pubSpec = new X509EncodedKeySpec(bytePubkey2);
+	    try {
+			KeyFactory keyFactory = KeyFactory.getInstance("RSA");
+		    return keyFactory.generatePublic(pubSpec);
+		} catch (NoSuchAlgorithmException | InvalidKeySpecException e) {
+			e.printStackTrace();
+		}
+	    return null;
 	}
 	//Courtesy of Clark Elliot's BlockJ Sample Code
 	public static byte[] signThis(byte[] dataToSign, PrivateKey privateKey) {
@@ -357,7 +381,7 @@ class KeyUtils {
 		}
 		return false;
 	}
-	public static String encryptIt(String data) throws NoSuchAlgorithmException {
+	public static String hashIt(String data) throws NoSuchAlgorithmException {
 		MessageDigest md = MessageDigest.getInstance("SHA-256");
 	   	md.update (data.getBytes());
 	    byte byteData[] = md.digest();
@@ -482,7 +506,7 @@ class BlockHolder {
 		//consortiumKeys.set(Integer.valueOf(processId), key); //gsonParser.fromJson(key, publicKey));
 		//PublicKey temp = gsonParser.fromJson(key,  publicKey);
 		//consortiumKeys.set(Integer.valueOf(processId),  temp);
-		consortiumKeys.set(Integer.valueOf(processId), KeyUtils.getMyPublicKey(0));
+		consortiumKeys.set(Integer.valueOf(processId), KeyUtils.decodeKey(key));
 
 		keysReceived ++;
 	}
@@ -667,7 +691,8 @@ class KeyWorker extends Thread implements IWorker {
 					
 					//ADDING THE KEY TO OUR KEY-ARRAY
 					Gson gsonParser = new GsonBuilder().setPrettyPrinting().create();
-					blockHolder.addKey(gsonParser.toJson(key), processId, gsonParser);
+//					blockHolder.addKey(gsonParser.toJson(key), processId, gsonParser);
+					blockHolder.addKey(key,  processId, gsonParser);
 				}
 			}catch (NumberFormatException numex) {
 				System.out.println("Server received an invalid key from a consortium member: {" + whatFailed + "} on port " + this.socket.getLocalPort());
@@ -978,7 +1003,7 @@ class BlockWorker extends Thread {
 
 			//Hash it together to make the new WinningHash
 			String toHash = currentBlock.PreviousHash + randval + currentBlock.toString();
-			String encrypted = KeyUtils.encryptIt(toHash);
+			String encrypted = KeyUtils.hashIt(toHash);
 			currentBlock.WinningHash = encrypted;			
 			
 				//			Thread.sleep(3000);
@@ -1065,7 +1090,7 @@ class MedicalBlock implements Comparable {
 		timeStamp = T1 + "." + 0; 
 		RandomSeed = "0";
 		String toHash = "1" + "0" + this.toString();
-		String encrypted = KeyUtils.encryptIt(toHash);
+		String encrypted = KeyUtils.hashIt(toHash);
 		WinningHash = encrypted;
 
 	}
@@ -1095,14 +1120,14 @@ class MedicalBlock implements Comparable {
 //			prev hash + seed + data will equal the re-hash of that
 		System.out.println("VALIDATING:  " + this.toString());
 		String toCheck = PreviousHash + RandomSeed + this.toString();
-		String encrypted = KeyUtils.encryptIt(toCheck);
+		String encrypted = KeyUtils.hashIt(toCheck);
 		
 		return encrypted.contentEquals( WinningHash);
 	}
 	@Override
 	public String toString() {
 		String s = "|";
-		return "F=" +Fname + ",L=" +Lname + ",B=" + BlockID + ",D="+ DOB + ",S=" + SSNum + ",DTR=" + Diag + Treat + Rx + ",V=" +VerificationProcessID;//+ ",PH=" + PreviousHash;  
+		return "F=" +Fname + ",L=" +Lname + ",B=" + BlockID + ",D="+ DOB + ",S=" + SSNum + ",DTR=" + Diag + Treat + Rx + ",V=" +VerificationProcessID + ",PH=" + PreviousHash;  
 	}
 }	
 
