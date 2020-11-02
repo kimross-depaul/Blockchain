@@ -290,11 +290,11 @@ class KeyUtils {
 	*/
 
 	public static PublicKey getMyPublicKey(long seed) {
-		KeyPair keyPair = generateKeyPair(seed);
+		KeyPair keyPair = generateKeyPair(0);// COME BACK seed);
 		return keyPair.getPublic();
 	}
 	public static PrivateKey getMyPrivateKey(long seed) {
-		KeyPair keyPair = generateKeyPair(seed);
+		KeyPair keyPair = generateKeyPair(0);// COME BACK seed);
 		return keyPair.getPrivate();
 	}
 	//Makes a key pair so I can extract the public key
@@ -420,6 +420,8 @@ class MyPriorityQueue {
 		}
 	}
 	public String getTopHash() {
+		MedicalBlock temp = pq.peek();
+		System.out.println("(current prev block is " + temp.Fname + temp.Lname + " " + temp.WinningHash +  ")");
 		return pq.peek().WinningHash;
 	}
 }
@@ -461,7 +463,9 @@ class BlockHolder {
 		weAreDone = false;
 		ub = new MyPriorityQueue();
 		blockChain = new MyPriorityQueue();
+		System.out.print("Adding fake block...");
 		blockChain.addFakeBlock();
+		System.out.println("...added!");
 		myKeyPair = KeyUtils.generateKeyPair(intProcessID);
 		
 		//The arraylist didn't like being populated out of order, so let's initialize each first
@@ -922,7 +926,8 @@ class VerifiedBlockWorker extends Thread implements IWorker {
 		if (isValid) {
 			blockHolder.stopCurrentWork();
 			blockHolder.blockChain.add(newBlock);
-			blockHolder.ub.remove(newBlock); //make sure we don't process this block if we're late getting to it			
+			blockHolder.ub.remove(newBlock); //make sure we don't process this block if we're late getting to it		
+			System.out.println("<<<<< VALID BLOCK! >>>>>");
 		}else {
 			System.out.println("<<<<<<<<<<< THIS BLOCK DOESN'T PASS VALIDATION!!!>>>>>>>>>>");
 		}
@@ -962,15 +967,22 @@ class BlockWorker extends Thread {
 			}
 			System.out.println(" <-- We did " + tenths + " tenths of a second of *work*.\n");
 
+			//Set the winning answer for our fake work
 			currentBlock.RandomSeed = randval + "";
-			//winning hash = prev hash + seed + block data 
+			
+			//Give credit to the winner
+			currentBlock.VerificationProcessID = blockHolder.intProcessID + "";
+			
+			//Set the Winning Hash from the previous solved block
 			currentBlock.PreviousHash = blockHolder.blockChain.getTopHash();
+
+			//Hash it together to make the new WinningHash
 			String toHash = currentBlock.PreviousHash + randval + currentBlock.toString();
 			String encrypted = KeyUtils.encryptIt(toHash);
 			currentBlock.WinningHash = encrypted;			
 			
-//			Thread.sleep(3000);
-			currentBlock.VerificationProcessID = blockHolder.intProcessID + "";
+				//			Thread.sleep(3000);
+
 			Gson gsonParser = new GsonBuilder().setPrettyPrinting().create();
 			System.out.println("I SOLVED " + currentBlock.Fname + " " + currentBlock.Lname + "!");
 			//COME BACK:  We need to hash things in this block and its predecesor before sending it to the consortium
@@ -1034,6 +1046,7 @@ class MedicalBlock implements Comparable {
 		  Date date = new Date();
 		  String T1 = String.format("%1$s %2$tF.%2$tT", "", date); // Create the TimeStamp string.	  
 		  timeStamp = T1 + "." + procID; 
+		  VerificationProcessID = "";
 	  }
 	public MedicalBlock() throws NoSuchAlgorithmException { //For initial fake block;
 		BlockID = UUID.randomUUID().toString();
@@ -1080,6 +1093,7 @@ class MedicalBlock implements Comparable {
 		  //COME BACK
 		  //NEED TO CHECK THAT THE WINNING HASH WORKS PROPERLY
 //			prev hash + seed + data will equal the re-hash of that
+		System.out.println("VALIDATING:  " + this.toString());
 		String toCheck = PreviousHash + RandomSeed + this.toString();
 		String encrypted = KeyUtils.encryptIt(toCheck);
 		
@@ -1088,9 +1102,7 @@ class MedicalBlock implements Comparable {
 	@Override
 	public String toString() {
 		String s = "|";
-		return BlockID + s + VerificationProcessID + s + PreviousHash + s + Fname + s + Lname + s + DOB + s + SSNum + s 
-				+ Diag + s + Treat + s + Rx + s + RandomSeed + s + timeStamp + s + signedByCreator.toString();
-			
+		return "F=" +Fname + ",L=" +Lname + ",B=" + BlockID + ",D="+ DOB + ",S=" + SSNum + ",DTR=" + Diag + Treat + Rx + ",V=" +VerificationProcessID;//+ ",PH=" + PreviousHash;  
 	}
 }	
 
