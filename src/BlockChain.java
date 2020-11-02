@@ -294,13 +294,11 @@ class KeyUtils {
 		https://www.java67.com/2014/10/how-to-pad-numbers-with-leading-zeroes-in-Java-example.html
 	*/
 
-	public static PublicKey getMyPublicKey(long seed) {
-		KeyPair keyPair = generateKeyPair(0);// COME BACK seed);
-		return keyPair.getPublic();
+	public static PublicKey getMyPublicKey(BlockHolder blockHolder) {
+		return blockHolder.myKeyPair.getPublic();
 	}
-	public static PrivateKey getMyPrivateKey(long seed) {
-		KeyPair keyPair = generateKeyPair(0);// COME BACK seed);
-		return keyPair.getPrivate();
+	public static PrivateKey getMyPrivateKey(BlockHolder blockHolder) {
+		return blockHolder.myKeyPair.getPrivate();
 	}
 	//Makes a key pair so I can extract the public key
 	public static KeyPair generateKeyPair(long seed)  {
@@ -324,9 +322,13 @@ class KeyUtils {
 	public PublicKey getPublicKey(int intProcessID, BlockHolder blockHolder) {
 		return blockHolder.getKey(intProcessID);
 	}
-	public static void sendKeys(int intProcessID, int numConsortiumMembers, String keyPortPrefix) {
+	public static void sendKeys(BlockHolder blockHolder) {
+		int intProcessID = blockHolder.intProcessID;
+		int numConsortiumMembers = blockHolder.numConsortiumMembers;
+		String keyPortPrefix = blockHolder.KEY_PORT_PREFIX;
+		
 		//We send it encoded
-		PublicKey temp = KeyUtils.getMyPublicKey(intProcessID);
+		PublicKey temp = KeyUtils.getMyPublicKey(blockHolder);
 	    byte[] bytePubkey = temp.getEncoded();
 	    String stringKey = Base64.getEncoder().encodeToString(bytePubkey);
 		
@@ -393,6 +395,21 @@ class KeyUtils {
     
 	    return sb.toString();
 	}
+	
+	 public static byte[] signData(byte[] data, PrivateKey key) throws Exception {
+		    Signature signer = Signature.getInstance("SHA1withRSA");
+		    signer.initSign(key);
+		    signer.update(data);
+		    return (signer.sign());
+		  }
+	  public static boolean verifySig(byte[] data, PublicKey key, byte[] sig) throws Exception {
+		    Signature signer = Signature.getInstance("SHA1withRSA");
+		    signer.initVerify(key);
+		    signer.update(data);
+		    
+		    return (signer.verify(sig));
+		  }
+
 }
 class MyPriorityQueue {
 	private PriorityQueue<MedicalBlock> pq;
@@ -400,9 +417,7 @@ class MyPriorityQueue {
 	public MyPriorityQueue() {
 		pq = new PriorityQueue<MedicalBlock>();
 	}
-	public void addFakeBlock() throws NoSuchAlgorithmException {
-		pq.add(new MedicalBlock());
-	}
+
 	public boolean add(MedicalBlock m) {
 		Iterator<MedicalBlock> it = pq.iterator();
 		while (it.hasNext()) {
@@ -487,10 +502,10 @@ class BlockHolder {
 		weAreDone = false;
 		ub = new MyPriorityQueue();
 		blockChain = new MyPriorityQueue();
-		System.out.print("Adding fake block...");
-		blockChain.addFakeBlock();
-		System.out.println("...added!");
 		myKeyPair = KeyUtils.generateKeyPair(intProcessID);
+		System.out.print("Adding fake block...");
+		blockChain.add(new MedicalBlock(KeyUtils.getMyPrivateKey(this)));
+		System.out.println("...added!");
 		
 		//The arraylist didn't like being populated out of order, so let's initialize each first
 		for (int i = 0; i < numConsortiumMembers; i++) {
@@ -511,8 +526,7 @@ class BlockHolder {
 		keysReceived ++;
 	}
 	public PublicKey getKey(int pos) {
-//		return (PublicKey) consortiumKeys.get(pos);// COME BACK
-		return KeyUtils.getMyPublicKey(1);
+		return (PublicKey) consortiumKeys.get(pos);// COME BACK
 	}
 	public boolean hasAllKeys() {
 		if (keysReceived >= numConsortiumMembers) {
@@ -676,7 +690,7 @@ class KeyWorker extends Thread implements IWorker {
 			
 				if (blockHolder.startProcessingKeys == false && sb.toString().contentEquals("START!")) {
 					blockHolder.startProcessingKeys = true;
-					KeyUtils.sendKeys(blockHolder.intProcessID, blockHolder.numConsortiumMembers, blockHolder.KEY_PORT_PREFIX);
+					KeyUtils.sendKeys(blockHolder);
 					wasMyKeySent = true;
 				}else {
 					String key = "";
@@ -743,14 +757,14 @@ class UnverifiedBlockWorker extends Thread implements IWorker {
 		return !blockHolder.startProcessingVBs;
 	}
 	private void sendMyUBs(int intProcessID, BlockHolder blockHolder, Gson gsonParser) {
-		PriorityQueue<MedicalBlock> fileUBs = readBlocksFromFile("BlockInput" + intProcessID + ".txt");
+		PriorityQueue<MedicalBlock> fileUBs = readBlocksFromFile("BlockInput" + intProcessID + ".txt", KeyUtils.getMyPrivateKey(blockHolder));
 		
 		for (int i = 0; i < blockHolder.numConsortiumMembers; i++) {	
 			MessageUtils.sendMessageToServer(gsonParser.toJson(fileUBs), MessageUtils.parseTargetPort(blockHolder.UB_PORT_PREFIX, i));
 		}		
 		blockHolder.wereUBsSent = true;
 	}
-	private PriorityQueue<MedicalBlock> readBlocksFromFile(String fileName) {
+	private PriorityQueue<MedicalBlock> readBlocksFromFile(String fileName, PrivateKey privateKey) {
 		ArrayList<String> ret = new ArrayList<String>();
 		Scanner scanner = null;
 		try {
@@ -770,7 +784,7 @@ class UnverifiedBlockWorker extends Thread implements IWorker {
 		PriorityQueue<MedicalBlock> ub = new PriorityQueue<MedicalBlock>();
 
 		for (int i = 0; i < ret.size(); i++) {
-			ub.add(new MedicalBlock(ret.get(i), blockHolder.intProcessID + ""));
+			ub.add(new MedicalBlock(ret.get(i), blockHolder.intProcessID + "", privateKey));
 		}
 		return ub;
 	}
@@ -942,7 +956,7 @@ class VerifiedBlockWorker extends Thread implements IWorker {
 		//validate it yourself... make sure it's good
 		boolean isValid = false;
 		try {
-			isValid = newBlock.validate();
+			isValid = newBlock.validate(blockHolder);
 		} catch (NoSuchAlgorithmException e) {
 			System.out.println("Encryption not supported:  " + e.getMessage());
 		}
@@ -952,7 +966,6 @@ class VerifiedBlockWorker extends Thread implements IWorker {
 			blockHolder.stopCurrentWork();
 			blockHolder.blockChain.add(newBlock);
 			blockHolder.ub.remove(newBlock); //make sure we don't process this block if we're late getting to it		
-			System.out.println("<<<<< VALID BLOCK! >>>>>");
 		}else {
 			System.out.println("<<<<<<<<<<< THIS BLOCK DOESN'T PASS VALIDATION!!!>>>>>>>>>>");
 		}
@@ -1003,15 +1016,13 @@ class BlockWorker extends Thread {
 
 			//Hash it together to make the new WinningHash
 			String toHash = currentBlock.PreviousHash + randval + currentBlock.toString();
-			String encrypted = KeyUtils.hashIt(toHash);
-			currentBlock.WinningHash = encrypted;			
-			
-				//			Thread.sleep(3000);
+			String hashed = KeyUtils.hashIt(toHash);
+			currentBlock.WinningHash = hashed;			
+			currentBlock.SignedWinningHash = KeyUtils.signThis(hashed.getBytes(), KeyUtils.getMyPrivateKey(blockHolder));
 
 			Gson gsonParser = new GsonBuilder().setPrettyPrinting().create();
-			System.out.println("I SOLVED " + currentBlock.Fname + " " + currentBlock.Lname + "!");
-			//COME BACK:  We need to hash things in this block and its predecesor before sending it to the consortium
 			MessageUtils.sendMessageToConsortium(blockHolder.intProcessID + gsonParser.toJson(currentBlock), blockHolder.numConsortiumMembers, blockHolder.BLOCK_PORT_PREFIX);
+			System.out.println("I SOLVED " + currentBlock.Fname + " " + currentBlock.Lname + "!");
 		}catch (InterruptedException ie) {
 			System.out.println("***************************** Interrupted! Move on to another block ************************************");
 		}catch (NoSuchAlgorithmException ex) {
@@ -1049,16 +1060,18 @@ class MedicalBlock implements Comparable {
 	  String Rx;
 	  String RandomSeed; // Our guess. Ultimately our winning guess.
 	  String WinningHash;
+	  byte[] SignedWinningHash;
 	  String timeStamp;
+	  String CreatorProcessID;
 	  byte[] signedByCreator;
 	 
 	  
 	//John Smith 1996.03.07 123-45-6789 Chickenpox BedRest aspirin
 
-	  public MedicalBlock(String fileInput, String procID) {
+	public MedicalBlock(String fileInput, String procID, PrivateKey privateKey) {
 		  String[] vals = fileInput.split(" ");
 		  BlockID = UUID.randomUUID().toString();
-		  signedByCreator = KeyUtils.signThis(BlockID.getBytes(), KeyUtils.getMyPrivateKey(Long.valueOf(procID)));
+		  signedByCreator = KeyUtils.signThis(BlockID.getBytes(), privateKey);
 		  Fname = vals[0];
 		  Lname = vals[1];
 		  DOB = vals[2];
@@ -1066,6 +1079,7 @@ class MedicalBlock implements Comparable {
 		  Diag = vals[4];
 		  Treat = vals[5];
 		  Rx = vals[6];
+		  CreatorProcessID = procID;
 		  
 		  //Courtesy of Clark Elliot's BlockJ example
 		  Date date = new Date();
@@ -1073,9 +1087,9 @@ class MedicalBlock implements Comparable {
 		  timeStamp = T1 + "." + procID; 
 		  VerificationProcessID = "";
 	  }
-	public MedicalBlock() throws NoSuchAlgorithmException { //For initial fake block;
+	public MedicalBlock(PrivateKey privateKey) throws NoSuchAlgorithmException { //For initial fake block;
 		BlockID = UUID.randomUUID().toString();
-		signedByCreator = KeyUtils.signThis(BlockID.getBytes(), KeyUtils.getMyPrivateKey(Long.valueOf(0)));
+		signedByCreator = KeyUtils.signThis(BlockID.getBytes(), privateKey);
 		VerificationProcessID = "0";
 		PreviousHash = "1";
 		Fname = "Kim";
@@ -1092,6 +1106,7 @@ class MedicalBlock implements Comparable {
 		String toHash = "1" + "0" + this.toString();
 		String encrypted = KeyUtils.hashIt(toHash);
 		WinningHash = encrypted;
+		SignedWinningHash = KeyUtils.signThis(WinningHash.getBytes(), privateKey);
 
 	}
 	public String toJson() {
@@ -1114,15 +1129,34 @@ class MedicalBlock implements Comparable {
 		}*/
 		
 	}
-	public boolean validate() throws NoSuchAlgorithmException {
-		  //COME BACK
-		  //NEED TO CHECK THAT THE WINNING HASH WORKS PROPERLY
-//			prev hash + seed + data will equal the re-hash of that
-		System.out.println("VALIDATING:  " + this.toString());
+	public boolean validate(BlockHolder blockHolder) throws NoSuchAlgorithmException {
+		System.out.println("VALIDATING BLOCK:");
+		//Make sure when re-hashing, we get the same value
 		String toCheck = PreviousHash + RandomSeed + this.toString();
-		String encrypted = KeyUtils.hashIt(toCheck);
+		String hashed = KeyUtils.hashIt(toCheck);
+		boolean validHash = hashed.contentEquals( WinningHash);
 		
-		return encrypted.contentEquals( WinningHash);
+		//Verify the winning-process ID's signature
+		int winnerProc = Integer.valueOf(this.VerificationProcessID);
+		PublicKey winnersKey = blockHolder.getKey(winnerProc);
+		boolean validWinner = KeyUtils.verifySignature(WinningHash.getBytes(), winnersKey, SignedWinningHash);
+				
+		//Verify the signed blockID of the creating process
+		int creatorProcID = Integer.valueOf(this.CreatorProcessID);
+		PublicKey creatorsPublicKey = blockHolder.getKey(creatorProcID);		
+		boolean validCreationSignature = KeyUtils.verifySignature(BlockID.getBytes(), creatorsPublicKey, signedByCreator);
+		System.out.println("valid creation signature for " + creatorProcID + " = " + validCreationSignature);
+		
+		System.out.println("\tValid Hash? " + validHash);
+		System.out.println("\tValid Winner Signature? " + validWinner);
+		System.out.println("\tValid Creator's Signature? " + validCreationSignature);
+		if (validHash && validWinner && validCreationSignature) {
+			System.out.println("<<< VALID BLOCK! >>>");
+		}else {
+			System.out.println("<<< INVALID BLOCK!!! >>>");
+		}
+		
+		return validHash && validWinner && validCreationSignature;
 	}
 	@Override
 	public String toString() {
